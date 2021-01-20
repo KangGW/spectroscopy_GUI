@@ -16,6 +16,16 @@ import numpy as np
 from astropy.io import fits
 from astropy.table import Table, Column
 import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from astropy.visualization import ZScaleInterval, ImageNormalize
+from matplotlib.patches import Rectangle
+
+def zimshow(ax, image, **kwargs):
+    return ax.imshow(image, norm=znorm(image), origin='lower', **kwargs)
+
+def znorm(image):
+    return ImageNormalize(image, interval=ZScaleInterval())
 
 class pandaTableWidget(QTableWidget):
     def __init__(self, df, parent=None):
@@ -32,164 +42,196 @@ class pandaTableWidget(QTableWidget):
                 self.setItem(i, j, QTableWidgetItem(x))
         self.setHorizontalHeaderLabels(self.df.columns)
 
-# Work by ysbach(2019) `https://github.com/ysBach/SNU_AOclass/blob/master/Notebooks/Spectroscopy_Example.ipynb
-def make_summary(filelist, extension=0, fname_option='relative',
-                 output=None, format='ascii.csv',
-                 keywords=[], dtypes=[],
-                 example_header=None, sort_by='file', verbose=True):
-    """ Extracts summary from the headers of FITS files.
-    Parameters
-    ----------
-    filelist: list of str (path-like)
-        The list of file paths relative to the current working directory.
 
-    extension: int or str
-        The extension to be summarized.
+#할일: 일단 파일 목록을 받아와서 첫번째 파일에 대한  data = {'FILE-NAME':[' '], 'DATE-OBS':[' '], 'EXPTIME':[' '], 'IMAGETYPE':[' '], 'OBJECT':[' '], 'REMARKS':[' ']}
+#목록을 만드는 def를 하나 만들자.
 
-    fname_option: str {'absolute', 'relative', 'name'}
-        Whether to save full absolute/relative path or only the filename.
+#todo 다른 파일형에 적용할 수 있게 file opener를 수정할 수 있도록 만들자.
 
-    output: str or path-like
-        The directory and file name of the output summary file.
 
-    format: str
-        The astropy.table.Table output format.
-
-    keywords: list
-        The list of the keywords to extract (keywords should be in ``str``).
-
-    dtypes: list
-        The list of dtypes of keywords if you want to specify. If ``[]``,
-        ``['U80'] * len(keywords)`` will be used. Otherwise, it should have
-        the same length with ``keywords``.
-
-    example_header: str or path-like
-        The path including the filename of the output summary text file.
-
-    sort_by: str
-        The column name to sort the results. It can be any element of
-        ``keywords`` or ``'file'``, which sorts the table by the file name.
-    """
-
-    if len(filelist) == 0:
-        print("No FITS file found.")
-        return
-
-    def _get_fname(path):
-        if fname_option == 'relative':
-            return str(path)
-        elif fname_option == 'absolute':
-            return str(path.absolute())
-        else:
-            return path.name
-
-    options = ['absolute', 'relative', 'name']
-    if fname_option not in options:
-        raise KeyError(f"fname_option must be one of {options}.")
-
-    skip_keys = ['COMMENT', 'HISTORY']
-
-    if verbose:
-        if (keywords != []) and (keywords != '*'):
-            print("Extracting keys: ", keywords)
-        str_example_hdr = "Extract example header from {:s}\n\tand save as {:s}"
-        str_keywords = "All {:d} keywords will be loaded."
-        str_keyerror_fill = "Key {:s} not found for {:s}, filling with '--'."
-        str_valerror = "Please use 'U80' as the dtype for the key {:s}."
-        str_filesave = 'Saving the summary file to "{:s}"'
-
-    # Save example header
-    if example_header is not None:
-        example_fits = filelist[0]
-        if verbose:
-            print(str_example_hdr.format(str(example_fits), example_header))
-        ex_hdu = fits.open(example_fits)
-        ex_hdr = ex_hdu[extension].header
-        ex_hdr.totextfile(example_header, overwrite=True)
-
-    # load ALL keywords for special cases
-    if (keywords == []) or (keywords == '*'):
-        example_fits = filelist[0]
-        ex_hdu = fits.open(example_fits)
-        ex_hdu.verify('fix')
-        ex_hdr = ex_hdu[extension].header
-        N_hdr = len(ex_hdr.cards)
-        keywords = []
-
-        for i in range(N_hdr):
-            key_i = ex_hdr.cards[i][0]
-            if (key_i in skip_keys):
-                continue
-            elif (key_i in keywords):
-                str_duplicate = "Key {:s} is duplicated! Only first one will be saved."
-                print(str_duplicate.format(key_i))
-                continue
-            keywords.append(key_i)
-
-        if verbose:
-            print(str_keywords.format(len(keywords)))
-#            except fits.VerifyError:
-#                str_unparsable = '{:d}-th key is skipped since it is unparsable.'
-#                print(str_unparsable.format(i))
-#                continue
-
-    # Initialize
-    if len(dtypes) == 0:
-        dtypes = ['U80'] * len(keywords)
-        # FITS header MUST be within 80 characters! (FITS standard)
-
-    summarytab = Table(names=keywords, dtype=dtypes)
-    fnames = []
-
+def file_opener(filelist):
+    fileInfo = []
     # Run through all the fits files
     for fitsfile in filelist:
-        fnames.append(_get_fname(fitsfile))
-        hdu = fits.open(fitsfile)
-        hdu.verify('fix')
-        hdr = hdu[extension].header
         row = []
-        for key in keywords:
-            try:
-                row.append(hdr[key])
-            except KeyError:
-                if verbose:
-                    print(str_keyerror_fill.format(key, str(fitsfile)))
-                try:
-                    row.append('--')
-                except ValueError:
-                    raise ValueError(str_valerror.format('U80'))
-        summarytab.add_row(row)
+        row.append(str(fitsfile).split('\\')[-1])
+        hdu = fits.open(fitsfile)
+        hdr = hdu[0].header
+        row.append(hdr['DATE-OBS'])
+        row.append(hdr['EXPTIME'])
+        row.append(hdr['IMAGETYP'])
+        row.append(hdr['OBJECT'])
+        fileInfo.append(row)
         hdu.close()
+    
+    return np.array(fileInfo)
 
-    # Attache the file name, and then sort.
-    fnames = Column(data=fnames, name='file')
-    summarytab.add_column(fnames, index=0)
-    summarytab.sort(sort_by)
+class TableModel(QAbstractTableModel):
 
-    tmppath = Path('tmp.csv')
-    summarytab.write(tmppath, format=format)
-    summarytab = Table.read(tmppath, format=format)
+    def __init__(self, data):
+        super(TableModel, self).__init__()
+        self._data = data
 
-    if output is None or output == '':
-        tmppath.unlink()
+    def data(self, index, role):
+        if role == Qt.DisplayRole:
+            value = self._data.iloc[index.row(), index.column()]
+            return str(value)
 
-    else:
-        output = Path(output)
-        if verbose:
-            print(str_filesave.format(str(output)))
-        tmppath.rename(output)
+    def rowCount(self, index):
+        return self._data.shape[0]
 
-    return summarytab
+    def columnCount(self, index):
+        return self._data.shape[1]
+
+    def headerData(self, section, orientation, role):
+        # section is the index of the column/row.
+        if role == Qt.DisplayRole:
+            if orientation == Qt.Horizontal:
+                return str(self._data.columns[section])
+
+            if orientation == Qt.Vertical:
+                return str(self._data.index[section])
 
 
 
 
-# open windows
+class cropInfo:
+    def __init__(self):
+        self.y0 = 0
+        self.y1 = 0
+        self.x0 = 0
+        self.x1 = 0
+        self.filename = ''
+    def __repr__(self):
+        return str([self.y0,self.y1,self.x0,self.x1])
+    
+
+#plt canvas위의 특정 영역을 선택해서 선택 영역을 emit 하는 widget
+#ToDo 사각형을 반투명화해서 이쁘게 선택할수 있도록 만들자.
+
+class cropWidget(QWidget):
+    cropDoneSignal = pyqtSignal(cropInfo)
+    def __init__(self):
+        super().__init__()
+        self.initUI()
+        self.cropInfo = cropInfo()
+    def initUI(self):
+        
+        self.hbox = QHBoxLayout()
+
+        self.fig = plt.Figure()
+        self.canvas = FigureCanvas(self.fig)
+        self.ax = self.fig.add_subplot(111)
+        
+        self.canvas.mpl_connect("button_press_event", self.on_press)
+        self.canvas.mpl_connect("motion_notify_event", self.on_move)
+        self.canvas.mpl_connect("button_release_event", self.on_release)
+        
+
+        
+        self.hbox.addWidget(self.canvas)
+        self.setLayout(self.hbox)
+        
+    @pyqtSlot(str)
+    def onCropStarted (self, filename):
+        self.filename = filename
+        data=fits.open(Path(self.filename))[0].data
+        zimshow(self.ax, data)
+        self.canvas.draw()
+        
+    def on_press(self, event):
+        print ('press')
+        self.rect = Rectangle((0,0), 1, 1)
+        self.ax.add_patch(self.rect)
+        self.x0 = event.xdata
+        self.y0 = event.ydata
+
+    def on_move(self, event):
+        self.x1 = event.xdata
+        self.y1 = event.ydata
+        self.rect.set_width(self.x1 - self.x0)
+        self.rect.set_height(self.y1 - self.y0)
+        self.rect.set_xy((self.x0, self.y0))
+        self.ax.figure.canvas.draw()
+        
+
+    def on_release(self, event):
+        print ('release')
+        x = int(self.rect.get_x())
+        y = int(self.rect.get_y())
+        width = int(self.rect.get_width())
+        height = int(self.rect.get_height())
+        
+        x0 = x
+        x1 = x+width
+        y0 = y
+        y1 = y+height
+        if (x0>x1):
+            x0,x1 = x1,x0
+        if (y0>y1):
+            y0,y1 = y1,y0        
+        
+        self.cropInfo.x0 = x0
+        self.cropInfo.x1 = x1
+        self.cropInfo.y0 = y0
+        self.cropInfo.y1 = y1
+        self.cropInfo.filename = self.filename
+        self.cropDoneSignal.emit(self.cropInfo)
+        self.rect.remove()
+        self.ax.figure.canvas.draw()
+        
+        
+#cropwidget에서 선택된 영역을 crop 할지 물어보고 cropaction을 실행하는 widget
+class cropCheckWidget(QWidget):
+    imageCropSignal = pyqtSignal(cropInfo)
+    
+    def __init__(self):
+        super().__init__()
+        self.initUI()
+        self.cropInfo = cropInfo()
+        
+    def initUI(self):
+        self.gridLayout = QGridLayout()
+        self.setLayout(self.gridLayout)
+        self.fig = plt.Figure()
+        self.canvas = FigureCanvas(self.fig)
+        self.ax = self.fig.add_subplot(111)
+        
+        self.gridLayout.addWidget(self.canvas,0,0,1,-1)
+        self.yesBtn = QPushButton('&Yes', self)
+        self.noBtn = QPushButton('&No', self)
+        self.gridLayout.addWidget(self.yesBtn,1,0)
+        self.gridLayout.addWidget(self.noBtn,1,1)
+        self.yesBtn.clicked.connect(self.onYes)
+        self.noBtn.clicked.connect(self.onNo)
+    
+    @pyqtSlot(cropInfo)
+    def onCropDone (self, fileinfo):
+        self.show()
+        self.raise_()
+        self.cropInfo = fileinfo
+    
+        data=fits.open(Path(self.cropInfo.filename))[0].data[self.cropInfo.y0:self.cropInfo.y1,self.cropInfo.x0:self.cropInfo.x1]
+
+        zimshow(self.ax, data)
+        self.canvas.draw()
+        
+    def onNo(self):
+        self.close()
+    
+    def onYes(self):
+        self.imageCropSignal.emit(self.cropInfo)
+        self.close()
+
+# main windows
 class MyApp(QMainWindow):
+    imageNameSignal = pyqtSignal(str)
     
     def __init__(self):
         super().__init__() #super는 부모클래스(여기선 QWidget)의 메소드를 불러와주기 위해서 사용
         
+        
+
         #fileTable에 사용할 panda 프레임 만들어놓기
         data = {'FILE-NAME':[' '], 'DATE-OBS':[' '], 'EXPTIME':[' '], 'IMAGETYPE':[' '], 'OBJECT':[' '], 'REMARKS':[' ']}
         self.fitFileList = pd.DataFrame(data)
@@ -198,13 +240,30 @@ class MyApp(QMainWindow):
         
         
         
+        #Flagges 
+        self.isCropped = False
+        
+        
+        self.cropInfo = cropInfo()
+        #파일 관리를 용이하게 하기 위한 현재 폴더 위치 지정
+        self.currentFolderLocation = ''
+        #현재 열린 파일 위치
+        self.currentFitFileLocation = ''
         
         
         
         
         
+        self.cropWidget = cropWidget()
+        self.imageNameSignal.connect(self.cropWidget.onCropStarted)
+        self.cropCheckWidget = cropCheckWidget()        
+        self.cropWidget.cropDoneSignal.connect(self.cropCheckWidget.onCropDone)
+        self.cropCheckWidget.imageCropSignal.connect(self.imageCrop)
+
+
         
-        
+
+
         
         """self.date = QDate.currentDate()
     
@@ -286,16 +345,41 @@ class MyApp(QMainWindow):
         self.fileSplitter = QSplitter(Qt.Vertical)
         self.mainSplitter = QSplitter(Qt.Horizontal)
         
-        self.fitFileTable = pandaTableWidget(self.fitFileList)
-        
+                
         self.graphFileTable = pandaTableWidget(self.graphFileList)
+
+        self.fig = plt.Figure()
+        self.canvas = FigureCanvas(self.fig)
         
-        self.mainSplitter.addWidget(QFrame())
+        
+        self.mainSplitter.addWidget(self.canvas)
         self.mainSplitter.addWidget(self.fileSplitter)
+        
+        
+        #테이블들
+        #fit파일을 보여주는 테이블
+        
+        self.fitFileTable = QTableView()
+        self.fitFileModel = TableModel(self.fitFileList)
+        self.fitFileTable.setModel(self.fitFileModel)
+        #줄(row)별로 선택할수 있게 하는 기능
+        self.fitFileTable.setSelectionBehavior(QTableView.SelectRows)
+        #더블클릭하면 선택한 fit파일을 열어주는 기능
+        self.fitFileTable.doubleClicked.connect(self.onFitTableDoubleCliked)
+        #FitFile및 그래프를 열기 위한 plt canvas
+
+        
+        
+        
+        
         
         
         self.fileSplitter.addWidget(self.fitFileTable)
         self.fileSplitter.addWidget(self.graphFileTable)
+        
+        
+        
+        
         
         self.setCentralWidget(self.mainSplitter)
 
@@ -342,12 +426,27 @@ class MyApp(QMainWindow):
         self.exitAction.triggered.connect(self.close)
         
         #Processing Actions
+        #Crop
+        self.cropAction = QAction('Crop', self)
+        self.cropAction.setShortcut('Ctrl+C')
+        self.cropAction.triggered.connect(self.onCropAction)
+        self.cropAction.setStatusTip('Crop images')       
+        #오른쪽에서 선택된 파일을 기반으로 크롭할 수 있게 하자.
+        #하나 크롭하면 전부 크롭할 수 있도록.
+        #새로운 창을 띄워보자.
+        
+        
         
         #PreProcessing
         self.preProcessingAction = QAction('Preprocessing', self)
         self.preProcessingAction.setShortcut('Ctrl+P')
         self.preProcessingAction.triggered.connect(self.close)
-        self.preProcessingAction.setStatusTip('Crop and Preprocess images')
+        self.preProcessingAction.setStatusTip('Preprocess images')
+        
+        
+        
+        
+        
         
         #Identification
         self.IdentificationAction = QAction('Identificatoin', self)
@@ -368,7 +467,12 @@ class MyApp(QMainWindow):
         #001 Menubar를 통한 파일 오픈 및 정보 제공
         #파일 오픈은 Open 버튼(shortcut은 ctrl+O)를 통해 이루어지며 이때 폴더를 Open하게 된다.
         #이때 오픈된 파일에 대한 정보는 새 창으로 띄워주며 이 정보는 File_Information에서 다시 열어볼수 있게 하자.
+        #완성!! 
+        
         #추가기능으로 Open 버튼을 통해 연 파일 목록중 사용할 것과 사용하지 않을 것을 분류할 수 있도록 하는 기능을 넣어보자
+        
+        
+        
         #전처리부터 하자.
         
     
@@ -398,6 +502,8 @@ class MyApp(QMainWindow):
         
         
         
+        
+        
 #        startAction = QAction('Start', self)
 #        startAction.setShortcut('Shift+Space')
 #        startAction.setStatusTip('Start')
@@ -409,7 +515,10 @@ class MyApp(QMainWindow):
         
         
         filemenu = menubar.addMenu('&Processing')
-
+        filemenu.addAction(self.cropAction)
+        filemenu.addAction(self.preProcessingAction)
+        filemenu.addAction(self.IdentificationAction)
+        
         #ToolBar
         #self.toolbar = self.addToolBar('Exit')
         #self.toolbar.addAction(exitAction)
@@ -424,9 +533,13 @@ class MyApp(QMainWindow):
         file = str(QFileDialog.getExistingDirectory(self, "Select Directory"))
         toppath = Path(file)
         files = list(toppath.glob("*.fit"))
-        print(files)
-        summarytab = make_summary(files, keywords=["DATE-OBS", "EXPTIME", "IMAGETYP", "OBJECT"], output=toppath / "summary_20181023.csv")
-        print('='*80)
+        fileInfo = file_opener(files)
+        fileInfo = np.hstack((fileInfo, np.zeros((fileInfo.shape[0], 1), str)))
+        
+        self.fitFileList = pd.DataFrame(np.array(fileInfo),
+                   columns=['FILE-NAME', 'DATE-OBS', 'EXPTIME', 'IMAGETYPE', 'OBJECT', 'REMARKS'])
+        self.currentFolderLocation = file
+        self.onChangedFileList()
         
     def center(self):
         qr = self.frameGeometry()
@@ -437,10 +550,38 @@ class MyApp(QMainWindow):
     
     def Start(self):
         self.statusBar().showMessage('processing')   
-    
         
-
-
+    def onChangedFileList(self):
+        self.fitFileModel = TableModel(self.fitFileList)
+        self.fitFileTable.setModel(self.fitFileModel)
+    
+    @pyqtSlot(QModelIndex)
+    def onFitTableDoubleCliked(self, index):
+        row = index.row()
+        file = self.fitFileList['FILE-NAME'][row]
+        fileloc = self.currentFolderLocation+'/'+file
+        self.currentFitFileLocation = fileloc
+        if (self.isCropped):
+            data=fits.open(Path(fileloc))[0].data[self.cropInfo.y0:self.cropInfo.y1,self.cropInfo.x0:self.cropInfo.x1]
+        else:
+            data=fits.open(Path(fileloc))[0].data
+        ax = self.fig.add_subplot(111)
+        zimshow(ax, data)
+        self.canvas.draw()
+        
+    @pyqtSlot()
+    def onCropAction(self):
+        self.cropWidget.show()
+        self.cropWidget.raise_()
+        self.imageNameSignal.emit(self.currentFitFileLocation)
+    
+    
+    
+    @pyqtSlot(cropInfo)     
+    def imageCrop(self, crop):
+        self.cropWidget.close()
+        self.cropInfo = crop
+        self.isCropped = True
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
