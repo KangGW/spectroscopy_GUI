@@ -20,6 +20,8 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from astropy.visualization import ZScaleInterval, ImageNormalize
 from matplotlib.patches import Rectangle
+from astropy.nddata import CCDData
+
 
 def zimshow(ax, image, **kwargs):
     return ax.imshow(image, norm=znorm(image), origin='lower', **kwargs)
@@ -47,6 +49,78 @@ class pandaTableWidget(QTableWidget):
 #목록을 만드는 def를 하나 만들자.
 
 #todo 다른 파일형에 적용할 수 있게 file opener를 수정할 수 있도록 만들자.
+
+#아예 fitimage-table 형태로 볼 수 있는 위젯을 하나 만드는게 편할듯
+
+class fitImageTableWidget(QSplitter):
+    
+    def __init__(self, currentFolderLocation, fitFileList, cropInfo, isCropped):
+        super().__init__()
+        self.fitFileList = fitFileList
+        self.isCropped = isCropped
+        self.currentFolderLocation = currentFolderLocation
+        self.cropInfo = cropInfo
+        self.initUI()
+        
+    def initUI(self):
+
+        
+        self.fig = plt.Figure()
+        self.canvas = FigureCanvas(self.fig)
+        #Todo canvas에 vmax vmin을 조절해서 이미지를 이쁘게 보일수 있는 바를 만들자!
+        
+
+        
+        #테이블들
+        #fit파일을 보여주는 테이블
+        
+        self.fitFileTable = QTableView()
+        self.fitFileModel = TableModel(self.fitFileList)
+        self.fitFileTable.setModel(self.fitFileModel)
+        #줄(row)별로 선택할수 있게 하는 기능
+        self.fitFileTable.setSelectionBehavior(QTableView.SelectRows)
+        #더블클릭하면 선택한 fit파일을 열어주는 기능
+        self.fitFileTable.doubleClicked.connect(self.onFitTableDoubleCliked)
+        #FitFile및 그래프를 열기 위한 plt canvas
+        self.addWidget(self.canvas)
+        self.addWidget(self.fitFileTable)
+        
+
+
+
+    def fileOpen(self):
+        file = str(QFileDialog.getExistingDirectory(self, "Select Directory"))
+        toppath = Path(file)
+        files = list(toppath.glob("*.fit"))
+        fileInfo = file_opener(files)
+        fileInfo = np.hstack((fileInfo, np.zeros((fileInfo.shape[0], 1), str)))
+        self.fitFileList = pd.DataFrame(np.array(fileInfo),
+                   columns=['FILE-NAME', 'DATE-OBS', 'EXPTIME', 'IMAGETYPE', 'OBJECT', 'REMARKS'])   
+        self.currentFolderLocation = file
+        self.tableEdit()
+
+    def tableEdit(self):    
+        self.fitFileModel = TableModel(self.fitFileList)
+        self.fitFileTable.setModel(self.fitFileModel)        
+    
+    
+    @pyqtSlot(QModelIndex)
+    def onFitTableDoubleCliked(self, index):
+        row = index.row()
+        file = self.fitFileList['FILE-NAME'][row]
+        fileloc = self.currentFolderLocation+'/'+file
+        self.currentFitFileLocation = fileloc
+        if (self.isCropped):
+            data=fits.open(Path(fileloc))[0].data[self.cropInfo.y0:self.cropInfo.y1,self.cropInfo.x0:self.cropInfo.x1]
+        else:
+            data=fits.open(Path(fileloc))[0].data
+        ax = self.fig.add_subplot(111)
+        zimshow(ax, data)
+        self.canvas.draw()    
+    
+    
+
+
 
 
 def file_opener(filelist):
@@ -223,6 +297,94 @@ class cropCheckWidget(QWidget):
         self.imageCropSignal.emit(self.cropInfo)
         self.close()
 
+
+
+#설계 : 이미지를 볼 수 있는 창과, 진행 상황을 볼 수 있는 창을 만들자.
+#그냥 메인 윈도우 창 그대로 만들어도 될듯
+#크게 네 단계로 구분하자. 이미지 합치기, 다크-바이아스 플렛-다크 (이미지-다크)/플렛 
+#단계를 어떻게 구분할까?
+#combine - bias substraction - dark substraction - preprocessing 
+#버튼을 일렬로 배치하고 각각의 단계에서 버튼을 온-오프해서 순서를 정하자
+#각각의 단계에서 필요한 이미지의 목록을 - combine에선 콤바인이 완료된 이미지의 목록 -bias substraction에선 bias가 빠진 dark - dark substraction에서는 다크가 빠진 플렛 이미지 - preprocessing 후에는 프리프로세싱이 끝난 이미지들
+
+
+#Todo combine method 선택할수 있게 하기
+#Todo 이미지 선택기능(잘 안찍힌 사진들 없앨수 있게)넣기
+
+
+
+
+class preProccesorWidget(QWidget):
+    def __init__(self, currentFolderLocation, fitFileList, cropInfo, isCropped):
+        super().__init__()
+        self.imageWidget = fitImageTableWidget(currentFolderLocation, fitFileList, cropInfo, isCropped)
+        self.initUI()
+        
+    def initUI(self):
+        self.imageWidget.tableEdit()
+        self.gridLayout = QGridLayout()
+        
+        self.combineBtn =  QPushButton('&Combine', self)
+        self.biasSubstractionBtn = QPushButton('&Bias Substraction', self)
+        self.darkSubstractionBtn = QPushButton('&Dark Substraction', self)
+        self.preprocessingBtn = QPushButton('&Preprocessing', self)
+        self.combineBtn.clicked.connect(self.onCombine)
+        
+        
+        self.gridLayout.addWidget(self.combineBtn, 0, 0)
+        self.gridLayout.addWidget(self.biasSubstractionBtn, 0, 1)
+        self.gridLayout.addWidget(self.darkSubstractionBtn, 0, 2)
+        self.gridLayout.addWidget(self.preprocessingBtn, 0, 3)
+        
+        self.gridLayout.addWidget(self.imageWidget, 1,0, 1,-1)
+        #self.vbox.addWidget(self.imageWidget)
+
+        
+        self.setLayout(self.gridLayout)
+        
+        self.resize(1000,500)
+
+
+    #combine bias, dark(per exposure), flat(per expoure)
+    def onCombine(self):  
+        combpath = Path(self.imageWidget.currentFolderLocation + '/combine')
+        Path.mkdir(combpath, mode=0o777, exist_ok=True)
+
+        grouped =  self.imageWidget.fitFileList.groupby(["OBJECT", "EXPTIME"])
+
+        for name, group in grouped:
+            
+            if name[0] in ["cali", "flat", "comp_10", "comp_15"]:
+                print(name)
+                savepath = combpath / f"{name[0]}_{float(name[1]):.1f}.fits"  
+                print(savepath)
+                ccds = []
+                
+                for fpath in group['FILE-NAME']:
+                    ccd = fits.open(Path(self.imageWidget.currentFolderLocation+'/'+fpath))
+                    ccds.append(ccd[0].data[self.imageWidget.cropInfo.y0:self.imageWidget.cropInfo.y1,self.imageWidget.cropInfo.x0:self.imageWidget.cropInfo.x1])
+                print(np.median(ccds, axis=0))
+                print('whatt')
+                combined = np.median(ccds, axis=0)
+                hdr = ccd[0].header  # an arbitrary header: the last of the combined ccds
+                hdr["NCOMBINE"] = (len(ccds), "Number of images combined")
+            #print(combined)
+                combined_ccd = CCDData(data=combined, header=hdr, unit="adu")
+                combined_ccd.write(savepath, overwrite=True)
+        
+        
+        
+'''        
+    def onBiasSubstraction:
+        
+    def onDarkSubstraction:
+        
+    def onPreprocessing:
+        
+'''
+
+
+
 # main windows
 class MyApp(QMainWindow):
     imageNameSignal = pyqtSignal(str)
@@ -273,7 +435,7 @@ class MyApp(QMainWindow):
         #self.move(mv[0], mv[1])
         #self.resize(rs[0], rs[1])
         #self.setGeometry(mv[0], mv[1], rs[0], rs[1])
-        self.resize(1000,500)
+        self.resize(1500,750)
         self.center()
 #        self.setWindowIcon(QIcon('icon.png'))#아이콘 설정
         """
@@ -350,7 +512,7 @@ class MyApp(QMainWindow):
 
         self.fig = plt.Figure()
         self.canvas = FigureCanvas(self.fig)
-        
+        #Todo canvas에 vmax vmin을 조절해서 이미지를 이쁘게 보일수 있는 바를 만들자!
         
         self.mainSplitter.addWidget(self.canvas)
         self.mainSplitter.addWidget(self.fileSplitter)
@@ -440,9 +602,8 @@ class MyApp(QMainWindow):
         #PreProcessing
         self.preProcessingAction = QAction('Preprocessing', self)
         self.preProcessingAction.setShortcut('Ctrl+P')
-        self.preProcessingAction.triggered.connect(self.close)
+        self.preProcessingAction.triggered.connect(self.onPreprocessing)
         self.preProcessingAction.setStatusTip('Preprocess images')
-        
         
         
         
@@ -582,6 +743,11 @@ class MyApp(QMainWindow):
         self.cropWidget.close()
         self.cropInfo = crop
         self.isCropped = True
+        
+        
+    def onPreprocessing(self):
+        self.preProcessorWidget = preProccesorWidget(self.currentFolderLocation, self.fitFileList, self.cropInfo, self.isCropped)
+        self.preProcessorWidget.show()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
