@@ -74,6 +74,9 @@ import os
 ##넣으면 된다
 
 
+##Todo Pycharm 문제인지 astropy 문제인지 모르겠는데 fits open에서 파일이 없으면 에러메세지 없이  튕긴다. 이거 에러창 띄우는 방식으로 해결하는 코드 넣어주면 좋을듯
+
+
 
 # main windows
 class MyApp(QMainWindow):
