@@ -12,7 +12,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from astropy.visualization import ZScaleInterval, ImageNormalize
 from matplotlib.patches import Rectangle
 from astropy.nddata import CCDData
-from fitImageTableWidget import fitImageTableWidget, tableModel, fileOpener
+from fitImageTableWidget import fitImageTableWidget, tableModel, fileOpener, openFitData
 import os
 
 
@@ -53,6 +53,7 @@ class preProccesorWidget(QWidget):
         self.combineBtn.clicked.connect(self.onCombine)
         self.biasSubstractionBtn.clicked.connect(self.onBiasSubstraction)
         self.darkSubstractionBtn.clicked.connect(self.onDarkSubstraction)
+        self.preprocessingBtn.clicked.connect(self.onPreProcessing)
         self.pb = QProgressBar(self)
 
 
@@ -85,24 +86,23 @@ class preProccesorWidget(QWidget):
         i = 0
         for name, group in grouped:
             # Todo 체크창을 띄워서 OBJECT에 있는것중에 합칠것만 선택할수 있게 하자
-
+            # Todo 보고 관측 이미지 합칠 수 있으면 합치자(따로 이미지 align을 안해서 지금 단계에선 합쳐도 될까 싶다.)
+            # 나중에 합칠거 생각해서 일단 /combine에 옮기고 합치는 과정만 나중에 추가해 주자
             if name[0] in ["cali", "flat", "comp_10", "comp_15"]:
                 savePath = combPath / f"{name[0]}_{float(name[1]):.1f}.fit"
                 ccds = []
 
-                for fpath in group['FILE-NAME']:
-                    ccd = fits.open(Path(self.rawFolderLocation + '/' + fpath))
+                for fName in group['FILE-NAME']:
+                    filename = self.rawFolderLocation + '/' + fName
+                    hdr, data = openFitData(filename, fitInfo='SNUO')
                     if(self.fitImageTableWidget.flags.isCropped):
                         ccds.append(
-                            ccd[0].data[self.fitImageTableWidget.cropInfo.y0:self.fitImageTableWidget.cropInfo.y1,
+                            data[self.fitImageTableWidget.cropInfo.y0:self.fitImageTableWidget.cropInfo.y1,
                             self.fitImageTableWidget.cropInfo.x0:self.fitImageTableWidget.cropInfo.x1])
                     else:
-                        ccds.append(ccd[0].data)
+                        ccds.append(data)
                 combined = np.median(ccds, axis=0)
-                hdr = ccd[0].header  # an arbitrary header: the last of the combined ccds
                 hdr["NCOMBINE"] = (len(ccds), "Number of images combined")
-                # print(combined)
-                print(combined)
                 combined_ccd = CCDData(data=combined, header=hdr, unit="adu")
                 combined_ccd.write(savePath, overwrite=True)
             i = i + 1
@@ -122,7 +122,7 @@ class preProccesorWidget(QWidget):
         self.combineBtn.setEnabled(False)
         self.biasSubstractionBtn.setEnabled(True)
 
-    #Todo 다른 fit file 용으로 수정
+
     #Todo 필터등으로 여러개 있을 상황에 대한 수정
     def onBiasSubstraction(self):
         self.fitImageTableWidget.currentFolderLocation = self.rawFolderLocation + '/dark'
@@ -133,19 +133,18 @@ class preProccesorWidget(QWidget):
         darkFitFileList = self.fitImageTableWidget.fitFileList[self.fitImageTableWidget.fitFileList['IMAGETYPE'] == 'Dark Frame']
         biasFitFileList =  self.fitImageTableWidget.fitFileList[self.fitImageTableWidget.fitFileList['IMAGETYPE'] == 'Bias Frame']
         #bias data 불러오기
-        print(self.rawFolderLocation + '/combine/' + biasFitFileList['FILE-NAME'][0])
-        biasCCD = fits.open(Path(self.rawFolderLocation + '/combine/' + biasFitFileList['FILE-NAME'].iloc[0]))
-        biasData = biasCCD[0].data
+        biasFileName = self.rawFolderLocation + '/combine/' + biasFitFileList['FILE-NAME'].iloc[0]
+        biasHdr, biasData = openFitData(biasFileName)
 
         #dark data 불러오기 및 빼기
         nlist = len(darkFitFileList)
         i = 0
         for darkFile in darkFitFileList['FILE-NAME']:
             savePath = darkPath / darkFile
-            darkCCD = fits.open(Path(self.rawFolderLocation + '/combine/' + darkFile))
-            darkData = darkCCD[0].data
+            darkFileName = self.rawFolderLocation + '/combine/' + darkFile
+            darkHdr, darkData = openFitData(darkFileName)
             data = darkData-biasData
-            hdr = darkCCD[0].header
+            hdr = darkHdr
             hdr['HISTORY'] = 'BiasSub'
             subbedCCD = CCDData(data=data, header=hdr, unit="adu")
             subbedCCD.write(savePath, overwrite=True)
@@ -162,7 +161,7 @@ class preProccesorWidget(QWidget):
         self.fitImageTableWidget.tableEdit()
         self.biasSubstractionBtn.setEnabled(False)
         self.darkSubstractionBtn.setEnabled(True)
-
+#Todo Flat 여러개 있을때(필터별로)수정
     def onDarkSubstraction(self):
         self.fitImageTableWidget.currentFolderLocation = self.rawFolderLocation + '/flat'
 
@@ -171,6 +170,90 @@ class preProccesorWidget(QWidget):
 
         darkFitFileList = self.darkFileList
         flatFitFileList =  self.combFileList[self.combFileList['IMAGETYPE'] == 'Flat Field']
+        flatFileName = self.rawFolderLocation + '/combine/' + flatFitFileList['FILE-NAME'].iloc[0]
+        flatHdr, flatData = openFitData(flatFileName)
+        darkFileName = self.rawFolderLocation + '/dark/' + darkFitFileList['FILE-NAME'][darkFitFileList['EXPTIME']==flatFitFileList['EXPTIME'].iloc[0]].iloc[0]
+        darkHdr, darkData = openFitData(darkFileName)
+
+        flatFile  = flatFitFileList['FILE-NAME'].iloc[0]
+        savePath = flatPath / flatFile
+        data = flatData - darkData
+        hdr = flatHdr
+        hdr['HISTORY'] = 'BiasSub'
+        subbedCCD = CCDData(data=data, header=hdr, unit="adu")
+        subbedCCD.write(savePath, overwrite=True)
+
+
+        files = list(flatPath.glob("*.fit"))
+        fileInfo = fileOpener(files)
+        print(fileInfo)
+        fileInfo = np.hstack((fileInfo, np.zeros((fileInfo.shape[0], 1), str)))
+        flatFileList =  pd.DataFrame(np.array(fileInfo),
+                                                    columns=['FILE-NAME', 'DATE-OBS', 'EXPTIME', 'IMAGETYPE', 'OBJECT', 'REMARKS'])
+        self.fitImageTableWidget.fitFileList = flatFileList
+        self.flatFileList = flatFileList
+        self.fitImageTableWidget.tableEdit()
+        self.darkSubstractionBtn.setEnabled(False)
+        self.preprocessingBtn.setEnabled(True)
+
+    def onPreProcessing(self):
+
+        self.fitImageTableWidget.currentFolderLocation = self.rawFolderLocation + '/reduced'
+
+        reducedPath = Path(self.fitImageTableWidget.currentFolderLocation)
+        Path.mkdir(reducedPath, mode=0o777, exist_ok=True)
+
+        darkFitFileList = self.darkFileList
+        flatFitFileList =  self.flatFileList
+
+
+
+        grouped = self.rawFitFileList.groupby(["OBJECT", "EXPTIME"])
+        ngroup = grouped.ngroups
+        i = 0
+        for name, group in grouped:
+            # Todo 체크창을 띄워서 OBJECT에 있는것중에 합칠것만 선택할수 있게 하자
+
+            if name[0] not in ["cali", "flat"]:
+                ccds = []
+                i = 0
+                for fname in group['FILE-NAME']:
+                    i=i+1
+                    savePath = reducedPath / f"{name[0]}_{float(name[1]):.1f}_{i}.fit"
+                    print(self.rawFolderLocation + '/combine/' + fname)
+
+                    objCCD = fits.open(Path(self.rawFolderLocation + '/combine/' + fname))
+                    objEXPTIME = objCCD[0].header('EXPTIME')
+                    objDATA = objCCD[0].data
+
+                    #darkDATA = fits.open(self.rawFolderLocation + '/combine/' +  )
+                    #flatDATA =
+
+
+
+
+
+                    #objectCCD = fits.open(Path(self.rawFolderLocation + '/combine/' + fname))
+                    #objectDATA = ccd[0].data
+
+                #combined = np.median(ccds, axis=0)
+                #hdr = ccd[0].header  # an arbitrary header: the last of the combined ccds
+                #hdr["NCOMBINE"] = (len(ccds), "Number of images combined")
+                # print(combined)
+                #print(combined)
+                #combined_ccd = CCDData(data=combined, header=hdr, unit="adu")
+                #combined_ccd.write(savePath, overwrite=True)
+            #i = i + 1
+            #self.step = i / ngroup * 100
+            #self.onProgressChange()
+
+
+
+
+        '''
+        
+        
+        
         print(self.rawFolderLocation + '/combine/' + flatFitFileList['FILE-NAME'].iloc[0])
         flatCCD = fits.open(Path(self.rawFolderLocation + '/combine/' + flatFitFileList['FILE-NAME'].iloc[0]))
         flatData = flatCCD[0].data
@@ -195,9 +278,9 @@ class preProccesorWidget(QWidget):
         self.fitImageTableWidget.fitFileList = pd.DataFrame(np.array(fileInfo),
                                                     columns=['FILE-NAME', 'DATE-OBS', 'EXPTIME', 'IMAGETYPE', 'OBJECT', 'REMARKS'])
         self.fitImageTableWidget.tableEdit()
-        self.darkSubstractionBtn.setEnabled(False)
-        self.preprocessingBtn.setEnabled(True)
-
+        
+        self.preprocessingBtn.setEnabled(False)
+        '''
 
     def onProgressChange(self):
         self.pb.setValue(self.step)
@@ -217,11 +300,4 @@ class preProccesorWidget(QWidget):
             else:
                 event.ignore()
 
-'''        
-    
 
-    def onDarkSubstraction:
-
-    def onPreprocessing:
-
-'''
