@@ -14,7 +14,7 @@ from matplotlib.patches import Rectangle
 from astropy.nddata import CCDData
 from fitImageTableWidget import zimshow, znorm
 import os
-
+from fitInfo import flags, cropInfo, currentFileInfo
 # plt canvas위의 특정 영역을 선택해서 선택 영역을 emit 하는 widget
 
 
@@ -22,16 +22,6 @@ import os
 
 # ToDo 사각형을 반투명화해서 이쁘게 선택할수 있도록 만들자.
 
-class cropInfo:
-    def __init__(self):
-        self.y0 = 0
-        self.y1 = 0
-        self.x0 = 0
-        self.x1 = 0
-        self.filename = ''
-
-    def __repr__(self):
-        return str([self.y0, self.y1, self.x0, self.x1])
 
 class cropWidget(QWidget):
     cropDoneSignal = pyqtSignal(cropInfo)
