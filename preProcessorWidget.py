@@ -13,6 +13,7 @@ from astropy.visualization import ZScaleInterval, ImageNormalize
 from matplotlib.patches import Rectangle
 from astropy.nddata import CCDData
 from fitImageTableWidget import fitImageTableWidget, tableModel, fileOpener, openFitData
+from fitInfo import currentFileInfo
 import os
 
 
@@ -20,14 +21,15 @@ import os
 # Todo 이미지 선택기능(잘 안찍힌 사진들 없앨수 있게)넣기
 
 
-class preProccesorWidget(QWidget):
-    def __init__(self, currentFolderLocation, currentFileLocation, fitFileList, cropInfo, flags):
+class preProcessorWidget(QWidget):
+    preProcessingDoneSignal = pyqtSignal(currentFileInfo)
+    def __init__(self, currentFileInfo):
         super().__init__()
-        self.fitImageTableWidget = fitImageTableWidget(currentFolderLocation=currentFolderLocation, currentFileLocation = currentFileLocation, fitFileList = fitFileList, cropInfo=cropInfo, flags=flags)
-        self.initUI()
+        self.fitImageTableWidget = fitImageTableWidget(currentFileInfo)
+
         # 현재 작업중인 폴더와 이미지가 있는 기본폴더를 구분해줄 필요가 있으므로 따로 만들어 놓자.
-        self.rawFitFileList = fitFileList
-        self.rawFolderLocation = currentFolderLocation
+        self.rawFitFileList = currentFileInfo.fitFileList
+        self.rawFolderLocation = currentFileInfo.currentFolderLocation
         # 프리프로세싱단계에서 바로 열어줄수 있게 완료된 각각의 sub stage의 filelist를 만들어 놓자.
         self.combFileList = ''
         self.darkFileList = ''
@@ -35,6 +37,8 @@ class preProccesorWidget(QWidget):
 
         #combined에서 flag가 바뀌어서 중간에 창을 껐을때 문제가 생길 수 있으므로 완료되지 않고 창을 껐을때 수정할수 있는 단계를 만들자.
         self.isFinished = False
+        self.initUI()
+
 
     def initUI(self):
         self.fitImageTableWidget.tableEdit()
@@ -44,16 +48,19 @@ class preProccesorWidget(QWidget):
         self.biasSubstractionBtn = QPushButton('&Bias Substraction', self)
         self.darkSubstractionBtn = QPushButton('&Dark Substraction', self)
         self.preprocessingBtn = QPushButton('&Preprocessing', self)
+        self.doneBtn = QPushButton('&Done', self)
+
         self.combineBtn.setEnabled(True)
         self.biasSubstractionBtn.setEnabled(False)
         self.darkSubstractionBtn.setEnabled(False)
         self.preprocessingBtn.setEnabled(False)
-
+        self.doneBtn.setEnabled(False)
 
         self.combineBtn.clicked.connect(self.onCombine)
         self.biasSubstractionBtn.clicked.connect(self.onBiasSubstraction)
         self.darkSubstractionBtn.clicked.connect(self.onDarkSubstraction)
         self.preprocessingBtn.clicked.connect(self.onPreProcessing)
+        self.doneBtn.clicked.connect(self.onPreProcessingDone)
         self.pb = QProgressBar(self)
 
 
@@ -63,6 +70,7 @@ class preProccesorWidget(QWidget):
         self.gridLayout.addWidget(self.biasSubstractionBtn, 0, 1)
         self.gridLayout.addWidget(self.darkSubstractionBtn, 0, 2)
         self.gridLayout.addWidget(self.preprocessingBtn, 0, 3)
+        self.gridLayout.addWidget(self.doneBtn, 0, 4)
 
         self.gridLayout.addWidget(self.fitImageTableWidget, 1, 0, 1, -1)
         self.gridLayout.addWidget(self.pb, 2, 0, 1, -1)
@@ -77,8 +85,8 @@ class preProccesorWidget(QWidget):
 
     def onCombine(self):
         # combine bias, dark(per exposure), flat(per expoure)
-        self.fitImageTableWidget.currentFolderLocation = self.rawFolderLocation + '/combine'
-        combPath = Path(self.fitImageTableWidget.currentFolderLocation)
+        self.fitImageTableWidget.currentFileInfo.currentFolderLocation = self.rawFolderLocation + '/combine'
+        combPath = Path(self.fitImageTableWidget.currentFileInfo.currentFolderLocation)
         Path.mkdir(combPath, mode=0o777, exist_ok=True)
 
         grouped = self.rawFitFileList.groupby(["OBJECT", "EXPTIME"])
@@ -95,16 +103,30 @@ class preProccesorWidget(QWidget):
                 for fName in group['FILE-NAME']:
                     filename = self.rawFolderLocation + '/' + fName
                     hdr, data = openFitData(filename, fitInfo='SNUO')
-                    if(self.fitImageTableWidget.flags.isCropped):
+                    if(self.fitImageTableWidget.currentFileInfo.flags.isCropped):
                         ccds.append(
-                            data[self.fitImageTableWidget.cropInfo.y0:self.fitImageTableWidget.cropInfo.y1,
-                            self.fitImageTableWidget.cropInfo.x0:self.fitImageTableWidget.cropInfo.x1])
+                            data[self.fitImageTableWidget.currentFileInfo.cropInfo.y0:self.fitImageTableWidget.currentFileInfo.cropInfo.y1,
+                            self.fitImageTableWidget.currentFileInfo.cropInfo.x0:self.fitImageTableWidget.currentFileInfo.cropInfo.x1])
                     else:
                         ccds.append(data)
                 combined = np.median(ccds, axis=0)
                 hdr["NCOMBINE"] = (len(ccds), "Number of images combined")
                 combined_ccd = CCDData(data=combined, header=hdr, unit="adu")
                 combined_ccd.write(savePath, overwrite=True)
+
+            else:
+                j = 0
+                for fName in group['FILE-NAME']:
+                    j=j+1
+                    savePath = combPath / f"{name[0]}_{float(name[1]):.1f}_{j}.fit"
+                    filename = self.rawFolderLocation + '/' + fName
+                    hdr, data = openFitData(filename, fitInfo='SNUO')
+                    if(self.fitImageTableWidget.currentFileInfo.flags.isCropped):
+                        data = data[self.fitImageTableWidget.currentFileInfo.cropInfo.y0:self.fitImageTableWidget.currentFileInfo.cropInfo.y1,
+                            self.fitImageTableWidget.currentFileInfo.cropInfo.x0:self.fitImageTableWidget.currentFileInfo.cropInfo.x1]
+                    ccd = CCDData(data=data, header=hdr, unit="adu")
+                    ccd.write(savePath, overwrite=True)
+
             i = i + 1
             self.step = i / ngroup * 100
             self.onProgressChange()
@@ -115,23 +137,23 @@ class preProccesorWidget(QWidget):
         fileInfo = np.hstack((fileInfo, np.zeros((fileInfo.shape[0], 1), str)))
         combFileList = pd.DataFrame(np.array(fileInfo),
                                                     columns=['FILE-NAME', 'DATE-OBS', 'EXPTIME', 'IMAGETYPE', 'OBJECT', 'REMARKS'])
-        self.fitImageTableWidget.fitFileList = combFileList
+        self.fitImageTableWidget.currentFileInfo.fitFileList = combFileList
         self.combFileList = combFileList
         self.fitImageTableWidget.tableEdit()
-        self.fitImageTableWidget.flags.isReduced = True
+        self.fitImageTableWidget.currentFileInfo.flags.isReduced = True
         self.combineBtn.setEnabled(False)
         self.biasSubstractionBtn.setEnabled(True)
 
 
     #Todo 필터등으로 여러개 있을 상황에 대한 수정
     def onBiasSubstraction(self):
-        self.fitImageTableWidget.currentFolderLocation = self.rawFolderLocation + '/dark'
+        self.fitImageTableWidget.currentFileInfo.currentFolderLocation = self.rawFolderLocation + '/dark'
 
-        darkPath = Path(self.fitImageTableWidget.currentFolderLocation)
+        darkPath = Path(self.fitImageTableWidget.currentFileInfo.currentFolderLocation)
         Path.mkdir(darkPath, mode=0o777, exist_ok=True)
 
-        darkFitFileList = self.fitImageTableWidget.fitFileList[self.fitImageTableWidget.fitFileList['IMAGETYPE'] == 'Dark Frame']
-        biasFitFileList =  self.fitImageTableWidget.fitFileList[self.fitImageTableWidget.fitFileList['IMAGETYPE'] == 'Bias Frame']
+        darkFitFileList = self.fitImageTableWidget.currentFileInfo.fitFileList[self.fitImageTableWidget.currentFileInfo.fitFileList['IMAGETYPE'] == 'Dark Frame']
+        biasFitFileList =  self.fitImageTableWidget.currentFileInfo.fitFileList[self.fitImageTableWidget.currentFileInfo.fitFileList['IMAGETYPE'] == 'Bias Frame']
         #bias data 불러오기
         biasFileName = self.rawFolderLocation + '/combine/' + biasFitFileList['FILE-NAME'].iloc[0]
         biasHdr, biasData = openFitData(biasFileName)
@@ -156,16 +178,16 @@ class preProccesorWidget(QWidget):
         fileInfo = np.hstack((fileInfo, np.zeros((fileInfo.shape[0], 1), str)))
         darkFileList =  pd.DataFrame(np.array(fileInfo),
                                                     columns=['FILE-NAME', 'DATE-OBS', 'EXPTIME', 'IMAGETYPE', 'OBJECT', 'REMARKS'])
-        self.fitImageTableWidget.fitFileList = darkFileList
+        self.fitImageTableWidget.currentFileInfo.fitFileList = darkFileList
         self.darkFileList = darkFileList
         self.fitImageTableWidget.tableEdit()
         self.biasSubstractionBtn.setEnabled(False)
         self.darkSubstractionBtn.setEnabled(True)
 #Todo Flat 여러개 있을때(필터별로)수정
     def onDarkSubstraction(self):
-        self.fitImageTableWidget.currentFolderLocation = self.rawFolderLocation + '/flat'
+        self.fitImageTableWidget.currentFileInfo.currentFolderLocation = self.rawFolderLocation + '/flat'
 
-        flatPath = Path(self.fitImageTableWidget.currentFolderLocation)
+        flatPath = Path(self.fitImageTableWidget.currentFileInfo.currentFolderLocation)
         Path.mkdir(flatPath, mode=0o777, exist_ok=True)
 
         darkFitFileList = self.darkFileList
@@ -176,7 +198,7 @@ class preProccesorWidget(QWidget):
         darkHdr, darkData = openFitData(darkFileName)
 
         flatFile  = flatFitFileList['FILE-NAME'].iloc[0]
-        savePath = flatPath / flatFile
+        savePath = flatPath / 'masterFlat.fit'
         data = flatData - darkData
         hdr = flatHdr
         hdr['HISTORY'] = 'BiasSub'
@@ -190,7 +212,7 @@ class preProccesorWidget(QWidget):
         fileInfo = np.hstack((fileInfo, np.zeros((fileInfo.shape[0], 1), str)))
         flatFileList =  pd.DataFrame(np.array(fileInfo),
                                                     columns=['FILE-NAME', 'DATE-OBS', 'EXPTIME', 'IMAGETYPE', 'OBJECT', 'REMARKS'])
-        self.fitImageTableWidget.fitFileList = flatFileList
+        self.fitImageTableWidget.currentFileInfo.fitFileList = flatFileList
         self.flatFileList = flatFileList
         self.fitImageTableWidget.tableEdit()
         self.darkSubstractionBtn.setEnabled(False)
@@ -198,9 +220,9 @@ class preProccesorWidget(QWidget):
 
     def onPreProcessing(self):
 
-        self.fitImageTableWidget.currentFolderLocation = self.rawFolderLocation + '/reduced'
+        self.fitImageTableWidget.currentFileInfo.currentFolderLocation = self.rawFolderLocation + '/reduced'
 
-        reducedPath = Path(self.fitImageTableWidget.currentFolderLocation)
+        reducedPath = Path(self.fitImageTableWidget.currentFileInfo.currentFolderLocation)
         Path.mkdir(reducedPath, mode=0o777, exist_ok=True)
 
         darkFitFileList = self.darkFileList
@@ -208,79 +230,49 @@ class preProccesorWidget(QWidget):
 
 
 
-        grouped = self.rawFitFileList.groupby(["OBJECT", "EXPTIME"])
+        grouped = self.combFileList.groupby(["OBJECT", "EXPTIME"])
         ngroup = grouped.ngroups
         i = 0
         for name, group in grouped:
             # Todo 체크창을 띄워서 OBJECT에 있는것중에 합칠것만 선택할수 있게 하자
-
+            i = i + 1
             if name[0] not in ["cali", "flat"]:
-                ccds = []
-                i = 0
-                for fname in group['FILE-NAME']:
-                    i=i+1
-                    savePath = reducedPath / f"{name[0]}_{float(name[1]):.1f}_{i}.fit"
-                    print(self.rawFolderLocation + '/combine/' + fname)
+                for fName in group['FILE-NAME']:
 
-                    objCCD = fits.open(Path(self.rawFolderLocation + '/combine/' + fname))
-                    objEXPTIME = objCCD[0].header('EXPTIME')
-                    objDATA = objCCD[0].data
+                    saveName = 'r_'+fName
+                    savePath = reducedPath / saveName
+                    print(self.rawFolderLocation + '/combine/' + fName)
 
-                    #darkDATA = fits.open(self.rawFolderLocation + '/combine/' +  )
-                    #flatDATA =
+                    objFileName = self.rawFolderLocation + '/combine/' + fName
+                    objHdr, objData = openFitData(objFileName)
+                    objEXPTIME = objHdr['EXPTIME']
+                    darkFileName = self.rawFolderLocation + '/dark/' +  f"cali_{objEXPTIME:.1f}.fit"
+                    darkHdr, darkData = openFitData(darkFileName)
+                    flatFileName = self.rawFolderLocation + '/flat/' +  "masterFlat.fit"
+                    flatHdr, flatData = openFitData(flatFileName)
+                    reducedData = (objData-darkData)/flatData
+                    reducedHdr = objHdr
+                    reducedHdr['HISTORY'] = f"Dark Reduced by :{darkFileName}"
+                    reducedHdr['HISTORY'] = f"Flat Reduced by :{flatFileName}"
+                    reducedCCD = CCDData(data=reducedData, header=reducedHdr, unit="adu")
+                    reducedCCD.write(savePath, overwrite=True)
+                    self.step = i / ngroup * 100
+                    self.onProgressChange()
 
-
-
-
-
-                    #objectCCD = fits.open(Path(self.rawFolderLocation + '/combine/' + fname))
-                    #objectDATA = ccd[0].data
-
-                #combined = np.median(ccds, axis=0)
-                #hdr = ccd[0].header  # an arbitrary header: the last of the combined ccds
-                #hdr["NCOMBINE"] = (len(ccds), "Number of images combined")
-                # print(combined)
-                #print(combined)
-                #combined_ccd = CCDData(data=combined, header=hdr, unit="adu")
-                #combined_ccd.write(savePath, overwrite=True)
-            #i = i + 1
-            #self.step = i / ngroup * 100
-            #self.onProgressChange()
-
-
-
-
-        '''
-        
-        
-        
-        print(self.rawFolderLocation + '/combine/' + flatFitFileList['FILE-NAME'].iloc[0])
-        flatCCD = fits.open(Path(self.rawFolderLocation + '/combine/' + flatFitFileList['FILE-NAME'].iloc[0]))
-        flatData = flatCCD[0].data
-        print(self.rawFolderLocation + '/dark/' + darkFitFileList['FILE-NAME'][darkFitFileList['EXPTIME']==flatFitFileList['EXPTIME'].iloc[0]].iloc[0])
-        darkCCD = fits.open(Path(self.rawFolderLocation + '/dark/' + darkFitFileList['FILE-NAME'][darkFitFileList['EXPTIME']==flatFitFileList['EXPTIME'].iloc[0]].iloc[0]))
-        darkData = darkCCD[0].data
-
-        flatFile  = flatFitFileList['FILE-NAME'].iloc[0]
-        savePath = flatPath / flatFile
-        data = flatData - darkData
-        hdr = flatCCD[0].header
-        hdr['HISTORY'] = 'BiasSub'
-        subbedCCD = CCDData(data=data, header=hdr, unit="adu")
-        subbedCCD.write(savePath, overwrite=True)
-
-
-        files = list(flatPath.glob("*.fit"))
+        files = list(reducedPath.glob("*.fit"))
         fileInfo = fileOpener(files)
-        print(fileInfo)
         fileInfo = np.hstack((fileInfo, np.zeros((fileInfo.shape[0], 1), str)))
-
-        self.fitImageTableWidget.fitFileList = pd.DataFrame(np.array(fileInfo),
+        reducedFileList = pd.DataFrame(np.array(fileInfo),
                                                     columns=['FILE-NAME', 'DATE-OBS', 'EXPTIME', 'IMAGETYPE', 'OBJECT', 'REMARKS'])
+        self.fitImageTableWidget.currentFileInfo.fitFileList = reducedFileList
+        self.reducedFileList = reducedFileList
         self.fitImageTableWidget.tableEdit()
-        
+        self.isFinished = True
         self.preprocessingBtn.setEnabled(False)
-        '''
+        self.doneBtn.setEnabled(True)
+
+    def onPreProcessingDone(self):
+        self.preProcessingDoneSignal.emit(self.fitImageTableWidget.currentFileInfo)
 
     def onProgressChange(self):
         self.pb.setValue(self.step)
@@ -296,7 +288,7 @@ class preProccesorWidget(QWidget):
 
             if reply == QMessageBox.Yes:
                 event.accept()
-                self.fitImageTableWidget.flags.isReduced = False
+                self.fitImageTableWidget.currentFileInfo.flags.isReduced = False
             else:
                 event.ignore()
 
