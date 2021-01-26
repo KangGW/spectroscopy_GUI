@@ -8,7 +8,7 @@ Created on Tue Jan 19 21:44:52 2021
 https://github.com/ysBach/SNU_AOclass/blob/master/Notebooks/Spectroscopy_Example.ipynb
 
 """
-
+import copy
 import sys
 from PyQt5.QtWidgets import  *
 from PyQt5.QtGui import *
@@ -23,9 +23,11 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from astropy.visualization import ZScaleInterval, ImageNormalize
 from matplotlib.patches import Rectangle
 from astropy.nddata import CCDData
-from cropWidget import cropInfo, cropWidget, cropCheckWidget
-from fitImageTableWidget import fitImageTableWidget, flags
-from preProccesorWidget import preProccesorWidget
+from cropWidget import cropWidget, cropCheckWidget
+from fitImageTableWidget import fitImageTableWidget
+from preProcessorWidget import preProcessorWidget
+from fitInfo import cropInfo, currentFileInfo
+
 import os
 
 
@@ -84,28 +86,22 @@ class MyApp(QMainWindow):
     def __init__(self):
         super().__init__() #super는 부모클래스(여기선 QWidget)의 메소드를 불러와주기 위해서 사용
         #fileTable에 사용할 panda 프레임 만들어놓기
-        data = {'FILE-NAME':[' '], 'DATE-OBS':[' '], 'EXPTIME':[' '], 'IMAGETYPE':[' '], 'OBJECT':[' '], 'REMARKS':[' ']}
-        self.fitFileList = pd.DataFrame(data)
-
-        #Flagges 
-        self.flags = flags()
-        self.cropInfo = cropInfo()
-        #파일 관리를 용이하게 하기 위한 현재 폴더 위치 지정
-        self.currentFolderLocation = ''
-        #현재 열린 파일 위치
-        self.currentFileLocation = ''
-
+        data  = {'FILE-NAME':[' '], 'DATE-OBS':[' '], 'EXPTIME':[' '], 'IMAGETYPE':[' '], 'OBJECT':[' '], 'REMARKS':[' ']}
+        self.nullFitFileList = pd.DataFrame(data)
+        self.currentFileInfo = currentFileInfo(self.nullFitFileList)
         self.initUI()
         
         
         
     def initUI(self):
         self.cropWidget = cropWidget()
-        self.fitImageTableWidget = fitImageTableWidget(currentFolderLocation=self.currentFolderLocation, currentFileLocation = self.currentFileLocation, fitFileList = self.fitFileList, cropInfo=self.cropInfo, flags=self.flags)
+
+        self.fitImageTableWidget = fitImageTableWidget(self.currentFileInfo)
         self.imageNameSignal.connect(self.cropWidget.onCropStarted)
         self.cropCheckWidget = cropCheckWidget()        
         self.cropWidget.cropDoneSignal.connect(self.cropCheckWidget.onCropDone)
         self.cropCheckWidget.imageCropSignal.connect(self.imageCrop)
+
         self.resize(1500,750)
         self.center()
 #       self.setWindowIcon(QIcon('icon.png'))#아이콘 설정
@@ -267,22 +263,28 @@ class MyApp(QMainWindow):
     def onCropAction(self):
         self.cropWidget.show()
         self.cropWidget.raise_()
-        self.imageNameSignal.emit(self.fitImageTableWidget.currentFileLocation)
+        self.imageNameSignal.emit(self.fitImageTableWidget.currentFileInfo.currentFileLocation)
     
     
     
     @pyqtSlot(cropInfo)     
     def imageCrop(self, crop):
         self.cropWidget.close()
-        self.fitImageTableWidget.cropInfo = crop
-        self.fitImageTableWidget.flags.isCropped = True
+        self.fitImageTableWidget.currentFileInfo.cropInfo = crop
+        self.fitImageTableWidget.currentFileInfo.flags.isCropped = True
         self.fitImageTableWidget.tableEdit()
         
     def onPreprocessing(self):
-        self.preProcessorWidget \
-            = preProccesorWidget(currentFolderLocation=self.fitImageTableWidget.currentFolderLocation, currentFileLocation=self.fitImageTableWidget.currentFileLocation,
-                                 fitFileList=self.fitImageTableWidget.fitFileList, cropInfo=self.fitImageTableWidget.cropInfo, flags=self.fitImageTableWidget.flags)
+        currentFileInfo = copy.copy(self.fitImageTableWidget.currentFileInfo)
+        self.preProcessorWidget = preProcessorWidget(currentFileInfo)
+        self.preProcessorWidget.preProcessingDoneSignal.connect(self.onPreprocessingDone)
         self.preProcessorWidget.show()
+
+    @pyqtSlot(currentFileInfo)
+    def onPreprocessingDone(self, currentFileInfo):
+        self.fitImageTableWidget.currentFileInfo = currentFileInfo
+        self.preProcessorWidget.close()
+        self.fitImageTableWidget.tableEdit()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
