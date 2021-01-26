@@ -12,7 +12,13 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from astropy.visualization import ZScaleInterval, ImageNormalize
 from matplotlib.patches import Rectangle
 from astropy.nddata import CCDData
+from fitInfo import flags, cropInfo, currentFileInfo
 import os
+
+
+
+
+
 
 
 def zimshow(ax, image, **kwargs):
@@ -21,10 +27,7 @@ def zimshow(ax, image, **kwargs):
 def znorm(image):
     return ImageNormalize(image, interval=ZScaleInterval())
 
-class flags():
-    def __init__(self):
-        self.isCropped = False
-        self.isReduced = False
+
 
 # Todo .ini 나 (세팅파일을 따로 만들거나 main window에서 File>setting 등에서)and/or 읽을 헤더값의 형태를 수정할 수 있게 만들자.
 # todo 다른 파일형에 적용할 수 있게 file opener를 수정할 수 있도록 만들자.+하는중
@@ -50,7 +53,7 @@ def openFitData(filename, fitInfo='default'):
         return hdr, data
 
     except:
-        print('could not open {filename}, try other filename')
+        print(f'could not open {filename}, try other filename')
         raise fileNotFoundError
 
 
@@ -115,16 +118,11 @@ class pandaTableWidget(QTableWidget):
 
 class fitImageTableWidget(QSplitter):
 
-    def __init__(self, currentFolderLocation, currentFileLocation, fitFileList, cropInfo, flags, fitInfo ='SNUO'):
+    def __init__(self, currentFileInfo):
 
         super().__init__()
-        self.fitFileList = fitFileList
-        self.flags = flags
-        self.currentFolderLocation = currentFolderLocation
-        self.currentFileLocation = currentFileLocation
+        self.currentFileInfo = currentFileInfo
         self.currentData = ''
-        self.cropInfo = cropInfo
-        self.fitInfo = fitInfo
         self.initUI()
 
     def initUI(self):
@@ -137,7 +135,7 @@ class fitImageTableWidget(QSplitter):
         # fit파일을 보여주는 테이블
         self.imageLayout = QVBoxLayout()
         self.fitFileTable = QTableView()
-        self.fitFileModel = tableModel(self.fitFileList)
+        self.fitFileModel = tableModel(self.currentFileInfo.fitFileList)
         self.fitFileTable.setModel(self.fitFileModel)
         # 줄(row)별로 선택할수 있게 하는 기능
         self.fitFileTable.setSelectionBehavior(QTableView.SelectRows)
@@ -164,9 +162,9 @@ class fitImageTableWidget(QSplitter):
             filePath, fileList = self.fitFileErrorOnFileOpen()
         fileInfo = fileOpener(fileList)
         fileInfo = np.hstack((fileInfo, np.zeros((fileInfo.shape[0], 1), str)))
-        self.fitFileList = pd.DataFrame(np.array(fileInfo),
+        self.currentFileInfo.fitFileList = pd.DataFrame(np.array(fileInfo),
                                         columns=['FILE-NAME', 'DATE-OBS', 'EXPTIME', 'IMAGETYPE', 'OBJECT', 'REMARKS'])
-        self.currentFolderLocation = filePath
+        self.currentFileInfo.currentFolderLocation = filePath
         self.tableEdit()
 
     def fitFileErrorOnFileOpen(self):
@@ -182,21 +180,21 @@ class fitImageTableWidget(QSplitter):
     def tableEdit(self):
         self.fig.clear()
         self.canvas.draw()
-        self.fitFileModel = tableModel(self.fitFileList)
+        self.fitFileModel = tableModel(self.currentFileInfo.fitFileList)
         self.fitFileTable.setModel(self.fitFileModel)
 
     @pyqtSlot(QModelIndex)
     def onFitTableDoubleCliked(self, index):
         row = index.row()
-        file = self.fitFileList['FILE-NAME'][row]
-        fileloc = self.currentFolderLocation + '/' + file
-        self.currentFileLocation = fileloc
+        file = self.currentFileInfo.fitFileList['FILE-NAME'][row]
+        fileloc = self.currentFileInfo.currentFolderLocation + '/' + file
+        self.currentFileInfo.currentFileLocation = fileloc
         hdr, data = openFitData(fileloc, fitInfo='SNUO')
 
 
-        if (self.flags.isCropped and not self.flags.isReduced):
-            data = data[self.cropInfo.y0:self.cropInfo.y1,
-                   self.cropInfo.x0:self.cropInfo.x1]
+        if (self.currentFileInfo.flags.isCropped and not self.currentFileInfo.flags.isReduced):
+            data = data[self.currentFileInfo.cropInfo.y0:self.currentFileInfo.cropInfo.y1,
+                   self.currentFileInfo.cropInfo.x0:self.currentFileInfo.cropInfo.x1]
 
         self.fig.clear()
         self.currentData = data
@@ -207,7 +205,7 @@ class fitImageTableWidget(QSplitter):
         self.imageVRangeSlider.setRange(data.min(),data.max())
         self.imageVRangeSlider.setTickInterval(int(data.max()/100))
         self.imageVRangeSlider.update()
-        self.currentFileLocation = fileloc
+        self.currentFileInfo.currentFileLocation = fileloc
         self.canvas.draw()
 
     @pyqtSlot(tuple)
