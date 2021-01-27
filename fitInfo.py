@@ -1,3 +1,5 @@
+import pandas as pd
+
 class flags():
     def __init__(self):
         self.isCropped = False
