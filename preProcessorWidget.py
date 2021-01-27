@@ -236,7 +236,7 @@ class preProcessorWidget(QWidget):
         for name, group in grouped:
             # Todo 체크창을 띄워서 OBJECT에 있는것중에 합칠것만 선택할수 있게 하자
             i = i + 1
-            if name[0] not in ["cali", "flat"]:
+            if name[0] not in ["cali", "flat", "comp_10", "comp_15"]:
                 for fName in group['FILE-NAME']:
 
                     saveName = 'r_'+fName
@@ -258,7 +258,8 @@ class preProcessorWidget(QWidget):
                     reducedCCD.write(savePath, overwrite=True)
                     self.step = i / ngroup * 100
                     self.onProgressChange()
-
+#Todo comp image는 dark 안빼줘도 되는건가? flat도 안빼줘도 되는건가?
+#일단 comp image는 combine folder에 넣자
         files = list(reducedPath.glob("*.fit"))
         fileInfo = fileOpener(files)
         fileInfo = np.hstack((fileInfo, np.zeros((fileInfo.shape[0], 1), str)))
