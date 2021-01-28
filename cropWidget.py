@@ -19,10 +19,6 @@ from fitInfo import flags, cropInfo, currentFileInfo
 
 
 
-
-# ToDo 사각형을 반투명화해서 이쁘게 선택할수 있도록 만들자.
-
-
 class cropWidget(QWidget):
     cropDoneSignal = pyqtSignal(cropInfo)
 
@@ -55,7 +51,7 @@ class cropWidget(QWidget):
 
     def on_press(self, event):
         print('press')
-        self.rect = Rectangle((0, 0), 1, 1)
+        self.rect = Rectangle((0, 0), 1, 1, alpha=0.5)
         self.ax.add_patch(self.rect)
         self.x0 = event.xdata
         self.y0 = event.ydata
