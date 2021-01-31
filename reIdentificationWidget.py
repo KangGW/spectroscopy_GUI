@@ -17,12 +17,15 @@ from fitInfo import currentFileInfo
 import os
 from skimage.feature import peak_local_max
 from astropy.modeling.fitting import LevMarLSQFitter
+from astropy.stats import sigma_clip, gaussian_fwhm_to_sigma
+from astropy.modeling.models import Gaussian1D, Chebyshev2D
+
 from scipy import stats
 #우선 있는 파일 중에 Cali 파일만 열어서 first identification 하는 프로그램
 #cali fileinfo를 받아와서 연 다음에
 
-#Todo 지금 있는 rawSpectrum 임시로 그린거니까 다시그리기
-# -> neonarc.fit은 지금 있는 cali파일에서 아이덴티피케이션만 해서 그린거라 부정확, 신뢰성있는 스펙트럼으로 바꿔서 넣자.
+#Todo 다른 Arc Spectrum 들 찾아서 넣기 NeonArcSpectrum.fit은 peak wavelength 맞춰놔서 Ientify 용도로는 신뢰성있게 쓸수 있다.
+
 
 #Todo 패턴매칭 알고리즘을 사용해 자동으로 비슷한 이미지구간을 찾아주는 기능도 구현해보자
 
@@ -36,14 +39,22 @@ from scipy import stats
 #아래는 이미 존재하는 identification 이미지를 불러온다. 이때 이미 저장된 preload 이미지를 사용하는 방법과
 #Todo 새로운 스펙트럼을 열어서 비교하는 방법을 사용한다.
 
+#호에엥
+#1. standardSpectrumCanvas가 선택된 상태에서 axvline을 더블클릭하면 그 라인의 색깔이 바뀌고,
+#2. selfSpectrumCanvas에 같은 색깔의 긴 axvline이 생긴다. 이건 마우스 따라 움직이고  selfSpectrumCanvas axvline 근처에 가져다되면 달라붙는다.
+#3. 마우스 우클릭시 과정 초기화-> 1. 전으로 이동
+#4. 달라붙었을때 더블클릭하면 해당 정보가 저장되고 왼쪽 테이블에 뜬다.
+
+
 class identificationWidget(QMainWindow):
     def __init__(self):
         super().__init__()
         self.peakThreshold = 0.01
         self.peakNumber =  50
         self.peakDistance = 2
+        self.pickDistance = 1
+        self.wavelengthPixelList = pd.DataFrame( {'Wavelength':[' '], 'Pixel':[' ']})
         self.initUI()
-
 
     def initUI(self):
         self.layout = QGridLayout()
@@ -56,7 +67,7 @@ class identificationWidget(QMainWindow):
 
         #직접 찍은 아이덴티피케이션 이미지의 스펙트럼을 보여주는 fig
 
-        self.selfSpectrumFig = plt.Figure(figsize = (15,5))
+        self.selfSpectrumFig = plt.Figure(figsize = (13,5))
         self.selfSpectrumCanvas = FigureCanvas(self.selfSpectrumFig)
 
         self.selfSpectrumFig.clear()
@@ -92,6 +103,8 @@ class identificationWidget(QMainWindow):
 
 
 
+
+
         # 직접 찍은 아이덴티피케이션 이미지를 보여주는 fig
 
         self.selfImageFig = plt.Figure(figsize = (5,2))
@@ -102,6 +115,10 @@ class identificationWidget(QMainWindow):
         self.selfImageCanvas.mpl_connect("button_press_event", self.onPressAtImage)
         self.selfImageCanvas.mpl_connect("motion_notify_event", self.onMoveAtImage)
         self.selfImageCanvas.mpl_connect("button_release_event", self.onReleaseAtImage)
+
+
+        self.selfSpectrumCanvas.mpl_connect('scroll_event', self.onScrollAtSelfSpectrum)
+        self.selfSpectrumCanvas.mpl_connect('pick_event', self.onPickPeakAtSelfSpectrum)
 
         self.NeonArcButton = QPushButton('&Neon')
         self.NeonArcButton.clicked.connect(self.neonSpectrumDraw)
@@ -117,11 +134,21 @@ class identificationWidget(QMainWindow):
 
 
         #비교할 아이덴티피케이션의 스펙트럼을 보여주는 fig
-        self.standardSpectrumFig = plt.Figure(figsize = (15,5))
+        self.standardSpectrumFig = plt.Figure(figsize = (13,5))
         self.standardSpectrumCanvas = FigureCanvas(self.standardSpectrumFig)
 
-        self.standardSpectrumFig.clear()
-        standardSpectrumAx = self.standardSpectrumFig.add_subplot(111)
+        self.standardSpectrumCanvas.mpl_connect('scroll_event', self.onScrollAtStandardSpectrum)
+        self.standardSpectrumCanvas.mpl_connect('pick_event', self.onPickPeakAtStandardSpectrum)
+        self.standardSpectrumCanvas.mpl_connect('button_press_event', self.onPressAtStandardSpectrum)
+
+        self.wavelengthPixelTable = QTableView()
+        self.wavelengthPixelModel = tableModel(self.wavelengthPixelList)
+        self.wavelengthPixelTable.setModel(self.wavelengthPixelModel)
+
+
+
+
+
 
         self.setCentralWidget(self.mainWidget)
         menubar = self.menuBar()
@@ -130,11 +157,19 @@ class identificationWidget(QMainWindow):
         filemenu.addAction(self.calibrationFileOpenAction)
 
 
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.addWidget(self.wavelengthPixelTable)
+        self.spectrums = QWidget()
+        self.spectrumsLayout = QVBoxLayout()
+        self.spectrumsLayout.addWidget(self.selfSpectrumCanvas)
+        self.spectrumsLayout.addWidget(self.standardSpectrumCanvas)
+        self.spectrums.setLayout(self.spectrumsLayout)
 
-        self.layout.addWidget(self.selfSpectrumCanvas, 1, 0, 2, 1)
+        self.splitter.addWidget(self.spectrums)
+
+        self.layout.addWidget(self.splitter, 1, 0, 3, 1)
         self.layout.addWidget(self.selfImageCanvas,1,1,1,1)
         self.layout.addWidget(self.selfPeakControl, 2, 1, 1, 1)
-        self.layout.addWidget(self.standardSpectrumCanvas,3,0)
         self.layout.addWidget(self.standardSpectrumButton,3,1)
 
 
@@ -170,8 +205,72 @@ class identificationWidget(QMainWindow):
         self.peakThresholdLabel.setText(f'Threshold of peak = {self.peakThreshold}')
         self.selfSpectrumDraw(ymin = self.selfImageY[0], ymax= self.selfImageY[1], data = self.selfData, args=[self.peakDistance,self.peakThreshold,self.peakNumber])
 
+    def onScrollAtSelfSpectrum(self, event):
+        xmin, xmax = self.selfSpectrumAx.get_xlim()
+        xnow = event.xdata
+        if (event.button == 'up'):
+            xsize = int((xmax-xmin)*0.40)
+            xmin = xnow-xsize
+            xmax = xnow+xsize
+            self.selfSpectrumAx.set_xlim(xmin, xmax)
+            self.selfSpectrumAx.figure.canvas.draw()
+        elif (event.button == 'down'):
+            xsize = int((xmax-xmin)*0.625)
+            xmin = xnow-xsize
+            xmax = xnow+xsize
+            self.selfSpectrumAx.set_xlim(xmin, xmax)
+            self.selfSpectrumAx.figure.canvas.draw()
+
+    def onPickPeakAtSelfSpectrum(self, event):
+        print('pick')
+    def onScrollAtStandardSpectrum(self, event):
+        xmin, xmax = self.standardSpectrumAx.get_xlim()
+        xnow = event.xdata
+        if (event.button == 'up'):
+            xsize = int((xmax-xmin)*0.40)
+            xmin = xnow-xsize
+            xmax = xnow+xsize
+            self.standardSpectrumAx.set_xlim(xmin, xmax)
+            self.standardSpectrumAx.figure.canvas.draw()
+        elif (event.button == 'down'):
+            xsize = int((xmax-xmin)*0.625)
+            xmin = xnow-xsize
+            xmax = xnow+xsize
+            self.standardSpectrumAx.set_xlim(xmin, xmax)
+            self.standardSpectrumAx.figure.canvas.draw()
+
+    def onPickPeakAtStandardSpectrum(self, event):
+        if (event.mouseevent.dblclick):
+            self.pickedPeak = self.standardSpectrumAx.axvline(event.artist.get_position()[0], color='blue')
+            if (event.artist.get_position()[1]>event.artist.axes.get_ylim()[1]*0.95):
+                self.pickedText = self.standardSpectrumAx.text(event.artist.get_position()[0],
+                                                               event.artist.get_position()[1],
+                                                               event.artist.get_text(), c = 'blue', bbox=dict(facecolor='white', ec = 'none'))
+            else:
+                self.pickedText = self.standardSpectrumAx.text(event.artist.get_position()[0],
+                                                               event.artist.get_position()[1],
+                                                               event.artist.get_text(), ha='center', va='center',
+                                                               rotation=90, clip_on=True, c = 'blue', bbox=dict(facecolor='white', ec = 'none'))
+
+            xshift = self.selfSpectrumAx.transData.inverted().transform((event.mouseevent.x, 0))
+
+            self.peakPicker = self.selfSpectrumAx.axvline(xshift[0], color='blue', picker = self.pickDistance)
+            self.selfSpectrumAx.figure.canvas.draw()
+            self.standardSpectrumAx.figure.canvas.draw()
+            print(event.artist.get_text())
 
 
+    def onPressAtStandardSpectrum(self, event):
+        if(event.button == 3):
+            self.onPickDisable()
+
+    def onPickDisable(self):
+        self.pickedPeak.remove()
+        self.pickedText.remove()
+        self.peakPicker.remove()
+
+        self.selfSpectrumAx.figure.canvas.draw()
+        self.standardSpectrumAx.figure.canvas.draw()
 
 
     def onPressAtImage(self, event):
@@ -213,23 +312,24 @@ class identificationWidget(QMainWindow):
         identify = np.average(data[ymin:ymax, :], axis=0)
         ground = np.median(identify[0:200])
         max_intens = np.max(identify)
-        peak_pix = peak_local_max(identify, indices=True, num_peaks=NMAX_PK,
+        peak_pixs = peak_local_max(identify, indices=True, num_peaks=NMAX_PK,
                                   min_distance=MINSEP_PK,
                                   threshold_abs=max_intens * MINAMP_PK + ground)
-        for i in peak_pix:
 
 
 
+        for i in peak_pixs:
             self.selfSpectrumAx.axvline(i, identify[i] / max(identify) + 0.0003, identify[i] / max(identify) + 0.2, color='c')
             if (identify[i] + max(identify) / 2.85> max(identify)):
-                self.selfSpectrumAx.text(i, identify[i] + max(identify) / 2000, str(i), clip_on=False)
+                self.selfSpectrumAx.text(i, identify[i] + max(identify) / 2000, str(i), clip_on=False, picker = self.pickDistance)
             else:
                 self.selfSpectrumAx.text(i, identify[i] + max(identify) / 2.85, str(i), ha= 'center', va= 'center',
-                                         rotation=90, clip_on=True)
+                                         rotation=90, clip_on=True, picker = self.pickDistance)
 
         self.selfSpectrumAx.plot(identify, color='r')
+        self.selfSpectrumAx.set_xlim(0, len(identify))
         self.selfSpectrumAx.set_ylim(0, )
-        plt.tight_layout()
+
         self.selfSpectrumAx.figure.canvas.draw()
 
     def neonSpectrumDraw(self):
@@ -238,6 +338,22 @@ class identificationWidget(QMainWindow):
         self.standardSpectrumDraw(data = data, arc = 'Neon')
 
 
+
+
+    def doFit(self):
+
+        x_identify = np.arange(len(identify))
+        peak_gauss = []
+        for peak_pix in peak_pixs:
+
+            g_init = Gaussian1D(amplitude=identify[peak_pix],
+                                mean=peak_pix,
+                                stddev=FWHM_ID * gaussian_fwhm_to_sigma,
+                                bounds={'amplitude': (0, 2 * identify_1[peak_pix]),
+                                        'mean': (peak_pix - FWHM_ID, peak_pix + FWHM_ID),
+                                        'stddev': (0, FWHM_ID)})
+            fitted = fitter(g_init, x_identify, identify)
+            peak_gauss.append(fitted.mean.value)
 
     def standardSpectrumDraw(self, data, arc, peaks=[]):
         wavelength = data[0]
@@ -254,13 +370,13 @@ class identificationWidget(QMainWindow):
             self.standardSpectrumAx.axvline(i, flux[np.where(i == wavelength)][0] / max(flux) + 0.003,
                         flux[np.where(i == wavelength)] / max(flux) + 0.2, color='c')
             if (flux[np.where(i == wavelength)][0] + max(flux) / 2.85 > max(flux)):
-                self.standardSpectrumAx.text(i, flux[np.where(i == wavelength)][0] + max(flux) / 2000, str(i), clip_on=False)
+                self.standardSpectrumAx.text(i, flux[np.where(i == wavelength)][0] + max(flux) / 2000, str(i), clip_on=False, picker = self.pickDistance)
             else:
                 self.standardSpectrumAx.text(i, flux[np.where(i == wavelength)][0] + max(flux) / 2.85, str(i),
-                         ha='center', va='center', rotation=90, clip_on=True)
+                         ha='center', va='center', rotation=90, clip_on=True, picker = self.pickDistance)
         self.standardSpectrumAx.plot(wavelength, flux, color='r')
         self.standardSpectrumAx.set_ylim(0, )
-        plt.tight_layout()
+        self.standardSpectrumAx.set_xlim(min(wavelength), max(wavelength))
         self.standardSpectrumAx.figure.canvas.draw()
 
     def onButtonClicked(self, status):
