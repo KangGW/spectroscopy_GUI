@@ -26,6 +26,7 @@ class cropWidget(QWidget):
         super().__init__()
         self.initUI()
         self.cropInfo = cropInfo()
+        self.isPressed = False
 
     def initUI(self):
 
@@ -50,13 +51,19 @@ class cropWidget(QWidget):
         self.canvas.draw()
 
     def on_press(self, event):
-        print('press')
+        if not event.inaxes : return
+        if event.inaxes != self.ax: return
         self.rect = Rectangle((0, 0), 1, 1, alpha=0.5)
         self.ax.add_patch(self.rect)
         self.x0 = event.xdata
         self.y0 = event.ydata
+        self.isPressed = True
 
     def on_move(self, event):
+        if not event.inaxes : return
+        if event.inaxes != self.ax: return
+        if not self.isPressed : return
+
         self.x1 = event.xdata
         self.y1 = event.ydata
         self.rect.set_width(self.x1 - self.x0)
@@ -65,7 +72,9 @@ class cropWidget(QWidget):
         self.ax.figure.canvas.draw()
 
     def on_release(self, event):
-        print('release')
+        if not event.inaxes : return
+        if event.inaxes != self.ax: return
+        if not self.isPressed: return
         x = int(self.rect.get_x())
         y = int(self.rect.get_y())
         width = int(self.rect.get_width())
@@ -88,7 +97,7 @@ class cropWidget(QWidget):
         self.cropDoneSignal.emit(self.cropInfo)
         self.rect.remove()
         self.ax.figure.canvas.draw()
-
+        self.isPressed = False
 
 
 
