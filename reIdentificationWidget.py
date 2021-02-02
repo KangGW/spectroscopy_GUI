@@ -29,6 +29,8 @@ from scipy import stats
 
 #Todo 패턴매칭 알고리즘을 사용해 자동으로 비슷한 이미지구간을 찾아주는 기능도 구현해보자
 
+#Todo 용도별로 Widget 묶고 method도 묶어서 보기 편하게 하자.
+
 
 #UI 디자인
 #우선 새 창을 열면 위아래로 구성된 plt 캔버스 두개랑 오른쪽에 파일 여는 버튼이 나온다
@@ -61,7 +63,9 @@ class identificationWidget(QMainWindow):
         self.isPicked = False
         self.isMatchFinished = True
         self.standardSpectrum = []
+        self.selfSpectrum = []
         self.currentPickedPeakWavelength = 0
+        self.selfFWHM = 4
         self.initUI()
 
     def initUI(self):
@@ -81,13 +85,13 @@ class identificationWidget(QMainWindow):
         self.selfSpectrumFig.clear()
 
         self.peakNumberSlider = QSlider(Qt.Horizontal, self)
-        self.peakNumberSlider.setValue(50)
+        self.peakNumberSlider.setValue(self.peakNumber)
         self.peakNumberSlider.setRange(1,100)
         self.peakDistanceSlider = QSlider(Qt.Horizontal, self)
-        self.peakDistanceSlider.setValue(2)
+        self.peakDistanceSlider.setValue(self.peakDistance)
         self.peakNumberSlider.setRange(1, 10)
         self.peakThresholdSlider = QSlider(Qt.Horizontal, self)
-        self.peakThresholdSlider.setValue(1)
+        self.peakThresholdSlider.setValue(self.peakThreshold*100)
         self.peakNumberSlider.setRange(1, 100)
 
         self.peakNumberLabel = QLabel(f'Number of Peak = {self.peakNumber}')
@@ -118,8 +122,6 @@ class identificationWidget(QMainWindow):
         self.selfImageFig = plt.Figure(figsize = (5,2))
         self.selfImageCanvas = FigureCanvas(self.selfImageFig)
 
-        self.selfImageFig.clear()
-
         self.selfImageCanvas.mpl_connect("button_press_event", self.onPressAtImage)
         self.selfImageCanvas.mpl_connect("motion_notify_event", self.onMoveAtImage)
         self.selfImageCanvas.mpl_connect("button_release_event", self.onReleaseAtImage)
@@ -130,6 +132,24 @@ class identificationWidget(QMainWindow):
         self.selfSpectrumCanvas.mpl_connect("button_press_event", self.onPressAtSelfSpectrum)
         self.selfSpectrumCanvas.mpl_connect("motion_notify_event", self.onMoveAtSelfSpectrum)
         self.selfSpectrumCanvas.mpl_connect("button_release_event", self.onReleaseAtSelfSpectrum)
+
+        self.selfSpectrumGaussFitFig = plt.Figure(figsize=(7, 7))
+        self.selfSpectrumGaussFitCanvas = FigureCanvas(self.selfSpectrumGaussFitFig)
+        self.gaussFitWidget = QWidget()
+        self.gaussFitLayout = QVBoxLayout()
+        self.gaussFitButton = QPushButton('&Yes')
+        self.gaussFitButton.clicked.connect(self.onGaussFitButtonClicked)
+        self.FWHMSlider = QSlider(Qt.Horizontal, self)
+        self.FWHMSlider.setValue(self.selfFWHM*10)
+        self.FWHMSlider.setRange(1, 100)
+
+        self.FWHMLabel = QLabel(f'FHWM for comp image = {self.selfFWHM}')
+        self.FWHMSlider.valueChanged.connect(self.onFWHMChanged)
+        self.gaussFitLayout.addWidget(self.selfSpectrumGaussFitCanvas)
+        self.gaussFitLayout.addWidget(self.FWHMSlider)
+        self.gaussFitLayout.addWidget(self.FWHMLabel)
+        self.gaussFitLayout.addWidget(self.gaussFitButton)
+        self.gaussFitWidget.setLayout(self.gaussFitLayout)
 
 
 
@@ -214,8 +234,9 @@ class identificationWidget(QMainWindow):
         self.mainWidget.setLayout(self.layout)
         self.setCentralWidget(self.mainWidget)
 
-
-    #opens file and
+    '''
+    칼리브레이션 파일(comp 파일)을 열고 Identification에 사용될 Y방향(Wavelength에 수직한 방향) 구간을 결정하는 메소드    
+    '''
     def onCalibnationFileOpen(self):
         filePath = QFileDialog.getOpenFileName(self, 'Open calibration file','./Spectroscopy_Example/20181023/combine/')[0]
         hdr, data = openFitData(filePath)
@@ -226,6 +247,13 @@ class identificationWidget(QMainWindow):
 
         self.imageWidth = int (data.shape[1])
         self.selfData = data
+
+
+    '''
+    칼리브레이션파일 스펙트럼에서 Peak을 찾는 과정에 관여하는 3가지 initial value(number of peaks, distance btw peaks,
+    threshol of peaks)를 조정해서 적절히 Peak을 찾을 수 있게 하는 메소드 
+    Slider의 값을 받아서 canvas에 적용한다.
+    '''
 
     def onPeakNumberValueChanged(self, val):
         self.peakNumber = val
@@ -241,6 +269,12 @@ class identificationWidget(QMainWindow):
         self.peakThreshold = val/100
         self.peakThresholdLabel.setText(f'Threshold of peak = {self.peakThreshold}')
         self.selfSpectrumDraw(ymin = self.selfImageY[0], ymax= self.selfImageY[1], data = self.selfData, args=[self.peakDistance,self.peakThreshold,self.peakNumber])
+
+    '''
+    칼리브레이션 스펙트럼 그래프를  확대/축소하는 메소드. 
+    스크롤을 내리면 마우스 위치를 중심으로 xlim이 4/5배가 되고,
+    스크롤을 올리면 마우스 위치를 중심으로 xlim이 5/4배가 된다.
+    '''
 
     def onScrollAtSelfSpectrum(self, event):
         xmin, xmax = self.selfSpectrumAx.get_xlim()
@@ -258,15 +292,17 @@ class identificationWidget(QMainWindow):
             self.selfSpectrumAx.set_xlim(xmin, xmax)
             self.selfSpectrumAx.figure.canvas.draw()
 
+    '''
+    칼리브레이션 스펙트럼 그래프에서 pickPeak 메소드를 통해 생성된 peakPicker를 움직이고 그 값을 table에 저장하는 메소드
+    peakPicker를 클릭한 채로 끌어서 움직일 수 있고 마우스를 놓으면 위치가 고정된다.
+    peak 근처 peakDistance 픽셀에서는 자동으로 peak에 붙고 이때 색깔이 연두색으로 바뀐다. 
+    '''
+
     def onPickPeakAtSelfSpectrum(self, event):
         if self.isPicked: return
         if not event.mouseevent.button == 1 :return
         print(self.isPicked)
         self.isPicked = True
-
-    def onPressAtSelfSpectrum(self, event):
-        if(event.button == 3):
-            self.onPickDisable()
 
     def onMoveAtSelfSpectrum(self, event):
         if not event.inaxes: return
@@ -277,8 +313,8 @@ class identificationWidget(QMainWindow):
         val = self.selfPeakPixs[np.argmin(np.abs(self.selfPeakPixs - event.xdata))]
 
         if (dist<self.peakDistance):
-            self.peakPicker = self.selfSpectrumAx.axvline(val, color='blue', picker=True , pickradius = self.pickDistance)
-            self.wavelengthPixelList.loc[self.wavelengthPixelList.Wavelength == self.currentPickedPeakWavelength, 'Pixel'] = int(val)
+            self.peakPicker = self.selfSpectrumAx.axvline(val, color='green', picker=True , pickradius = self.pickDistance)
+            self.wavelengthPixelList.loc[self.wavelengthPixelList.Wavelength == self.currentPickedPeakWavelength, 'Pixel'] = val
 
 
         else :
@@ -289,7 +325,6 @@ class identificationWidget(QMainWindow):
         self.selfSpectrumAx.figure.canvas.draw()
         self.onChangedList()
 
-
     def onReleaseAtSelfSpectrum(self, event):
         if not event.inaxes: return
         if event.inaxes != self.selfSpectrumAx: return
@@ -297,6 +332,19 @@ class identificationWidget(QMainWindow):
         self.isPicked = False
         print('release')
 
+    '''
+    칼리브레이션 스펙트럼 그래프에서 우클릭을 하면 pickPeak과정을 취소하는 메소드
+    우클릭을 하면 self.onPickDisable을 호출한다.     
+    '''
+    def onPressAtSelfSpectrum(self, event):
+        if(event.button == 3):
+            self.onPickDisable()
+
+    '''
+    스탠다드 스펙트럼 그래프를 확대/축소하는 메소드. 
+    스크롤을 내리면 마우스 위치를 중심으로 xlim이 4/5배가 되고,
+    스크롤을 올리면 마우스 위치를 중심으로 xlim이 5/4배가 된다.
+     '''
     def onScrollAtStandardSpectrum(self, event):
         xmin, xmax = self.standardSpectrumAx.get_xlim()
         xnow = event.xdata
@@ -313,6 +361,12 @@ class identificationWidget(QMainWindow):
             self.standardSpectrumAx.set_xlim(xmin, xmax)
             self.standardSpectrumAx.figure.canvas.draw()
 
+    '''
+    pickPeak을 시작하기 위한 조건을 나타낸 메소드들. 
+    standard spectrum 그래프에서 peak wavelength text를 더블클릭하거나 왼쪽 테이블에서 wavelength를 더블클릭하면 그
+    wavelength에 맞는 pickPeak이 실행된다. 
+    '''
+
     def onPickPeakAtStandardSpectrum(self, event):
         if (event.mouseevent.dblclick):
             self.pickPeak(event.artist.get_position()[0], self.standardSpectrum, event.mouseevent)
@@ -323,7 +377,11 @@ class identificationWidget(QMainWindow):
         wavelength = self.standardPeakWavelengths[row]
         self.pickPeak(wavelength, self.standardSpectrum)
 
-
+    '''
+    peak wavelength에 맞는 peak Pixel을 찾기 위한 메소드
+    선택된 wavelength와 그 peak의 axvline를 파란색으로 강조해서 보여주고 칼리브레이션 스펙트럼 그래프의 중간이나 그래프상의 
+    같은 위치에 움직일수 있는 peakPicker를 생성해 해당 wavelength에 맞는 peak Pixel을 찾을 수 있도록 한다. 
+    '''
 
     def pickPeak(self, waveNow, spectrum, mouse=None):
         if not self.isMatchFinished : return
@@ -352,6 +410,12 @@ class identificationWidget(QMainWindow):
         self.currentPickedPeakWavelength = waveNow
         self.isMatchFinished = False
 
+    '''
+    pickPeak을 완료하기 위한 메소드 
+    매치가 완료되었으면(onMatch) 해당 내용을 리스트에 저장하고 강제종료시(onAbort) 저장하지 않는다. 
+
+    '''
+    #Todo onExport시 매칭 내용을 csv 파일로 저장하는 기능을 구현
 
     def onMatch(self):
         print('match')
@@ -379,6 +443,10 @@ class identificationWidget(QMainWindow):
         self.standardSpectrumAx.figure.canvas.draw()
         self.isMatchFinished = True
 
+    '''
+    onCalibrationOpen 메소드로 열린 comp 이미지 파일에서 사용할 이미지의 y 축 범위를 찾는 메소드.
+    마우스 클릭후 끌어서 범위를 결정하면 selfSpectrumDraw에서 
+    '''
     def onPressAtImage(self, event):
         if not event.inaxes: return
         if event.inaxes != self.selfImageAx: return
@@ -431,21 +499,85 @@ class identificationWidget(QMainWindow):
                                   min_distance=MINSEP_PK,
                                   threshold_abs=max_intens * MINAMP_PK + ground)
 
+        self.selfPeakPixs = np.array(peakPixs)
+        self.selfSpectrum = np.array(identify)
+
+        self.selfSpectrumGaussShow(identify, peakPixs)
 
 
-        for i in peakPixs:
-            self.selfSpectrumAx.axvline(i, identify[i] / max(identify) + 0.0003, identify[i] / max(identify) + 0.2, color='c')
+
+    # 가우스핏을 통해 peak의 정확한 픽셀값을 찾는다.
+    # 값이 제일 큰 3개의 peak 스펙트럼과 그 가우스핏을 예시로 보여주고 특히 FWHM값을 모르거나 추측해야 할 경우
+    # FWHM값을 변경하면서 가우스핏이 제대로 되었는지
+
+    def selfSpectrumGaussShow(self, identify, peakPixs):
+        self.gaussFitWidget.show()
+        self.gaussFitWidget.raise_()
+        self.selfSpectrumGaussDraw(identify, peakPixs)
+
+#Todo 이거 잘 빼는 방법(바닥값에 맞게 잘 빼는 방법)을 찾아보자.
+    def selfSpectrumGaussDraw(self, identify, peakPixs):
+        iterations  = 5
+        fitter = LevMarLSQFitter()
+        self.selfSpectrumGaussFitFig.clear()
+        identify = identify - np.median(identify[0:100]) ##여기!
+        for i in np.arange(iterations ):
+            ax = self.selfSpectrumGaussFitFig.add_subplot(1, iterations, i+1)
+            peakPix = peakPixs[i][0]
+            xs = np.arange(peakPix - int(self.selfFWHM) * 5, peakPix + int(self.selfFWHM) * 5 + 1)
+            g_init = Gaussian1D(amplitude=identify[peakPix],
+                                mean=peakPix,
+                                stddev=self.selfFWHM * gaussian_fwhm_to_sigma,
+                                bounds={'amplitude': (0, 2 * identify[peakPix]),
+                                        'mean': (peakPix - self.selfFWHM, peakPix + self.selfFWHM),
+                                        'stddev': (0, self.selfFWHM)})
+            ax.set_ylim(0,max(identify)*1.1)
+            fitted = fitter(g_init, xs, identify[xs])
+            ax.plot(xs, identify[xs], 'b')
+            xss = np.arange(peakPix - self.selfFWHM * 5, peakPix + self.selfFWHM * 5 + 1, 0.01)
+            ax.plot(xss, fitted(xss), 'r--')
+            ax.figure.canvas.draw()
+
+
+    def selfSpectrumGaussFit(self, identify, peakPixs):
+        x_identify = np.arange(len(identify))
+        fitter = LevMarLSQFitter()
+        peak_gauss = []
+        for peakPix in peakPixs:
+            peakPix = peakPix[0]
+            g_init = Gaussian1D(amplitude=identify[peakPix],
+                                mean=peakPix,
+                                stddev=self.selfFWHM * gaussian_fwhm_to_sigma,
+                                bounds={'amplitude': (0, 2 * identify[peakPix]),
+                                        'mean': (peakPix - self.selfFWHM, peakPix + self.selfFWHM),
+                                        'stddev': (0, self.selfFWHM)}
+                                )
+            fitted = fitter(g_init, x_identify, identify)
+            peak_gauss.append(fitted.mean.value)
+        peak_gauss = np.round(peak_gauss, 4)
+
+        for i, j in zip(peakPixs, peak_gauss):
+            self.selfSpectrumAx.axvline(j, identify[i] / max(identify) + 0.0003, identify[i] / max(identify) + 0.2, color='c')
             if (identify[i] + max(identify) / 2.85> max(identify)):
-                self.selfSpectrumAx.text(i, identify[i] + max(identify) / 2000, str(i), clip_on=False, picker=True , pickradius = self.pickDistance)
+                self.selfSpectrumAx.text(j, identify[i] + max(identify) / 2000, str(j), clip_on=False, picker = self.pickDistance)
             else:
-                self.selfSpectrumAx.text(i, identify[i] + max(identify) / 2.85, str(i), ha= 'center', va= 'center',
+                self.selfSpectrumAx.text(j, identify[i] + max(identify) / 2.85, str(j), ha= 'center', va= 'center',
                                          rotation=90, clip_on=True, picker = self.pickDistance)
 
         self.selfSpectrumAx.plot(identify, color='r')
         self.selfSpectrumAx.set_xlim(0, len(identify))
         self.selfSpectrumAx.set_ylim(0, )
-        self.selfPeakPixs = np.array(peakPixs)
+        self.selfPeakPixs = np.array(peak_gauss)
         self.selfSpectrumAx.figure.canvas.draw()
+        self.gaussFitWidget.close()
+
+    def onFWHMChanged(self, val):
+        self.selfFWHM = val/10
+        self.FWHMLabel.setText(f'FHWM for comp image = {self.selfFWHM}')
+        self.selfSpectrumGaussDraw(self.selfSpectrum, self.selfPeakPixs)
+
+    def onGaussFitButtonClicked(self):
+        self.selfSpectrumGaussFit(self.selfSpectrum, self.selfPeakPixs)
 
     def neonSpectrumDraw(self):
         filePath = './NeonArcSpectrum.fit'
@@ -456,19 +588,11 @@ class identificationWidget(QMainWindow):
 
 
     def doFit(self):
+        spectrum = self.selfSpectrum
+        list = self.wavelengthPixelList
 
-        x_identify = np.arange(len(identify))
-        peak_gauss = []
-        for peak_pix in peak_pixs:
 
-            g_init = Gaussian1D(amplitude=identify[peak_pix],
-                                mean=peak_pix,
-                                stddev=FWHM_ID * gaussian_fwhm_to_sigma,
-                                bounds={'amplitude': (0, 2 * identify_1[peak_pix]),
-                                        'mean': (peak_pix - FWHM_ID, peak_pix + FWHM_ID),
-                                        'stddev': (0, FWHM_ID)})
-            fitted = fitter(g_init, x_identify, identify)
-            peak_gauss.append(fitted.mean.value)
+
 
     def standardSpectrumDraw(self, data, arc, peaks=[]):
         wavelength = data[0]
