@@ -27,7 +27,7 @@ from scipy import stats
 #Todo 다른 Arc Spectrum 들 찾아서 넣기 NeonArcSpectrum.fit은 peak wavelength 맞춰놔서 Ientify 용도로는 신뢰성있게 쓸수 있다.
 
 
-#Todo 패턴매칭 알고리즘을 사용해 자동으로 비슷한 이미지구간을 찾아주는 기능도 구현해보자
+
 
 #Todo 용도별로 Widget 묶고 method도 묶어서 보기 편하게 하자.
 
@@ -39,13 +39,22 @@ from scipy import stats
 #위에는 직접 찍은 identification 이미지를 열고 그 오른쪽에 이미지의 y 축에 따라 사용할 데이터의 범위를 정할 수 있게
 #이미지를 보여주는 창을 만든다.
 #아래는 이미 존재하는 identification 이미지를 불러온다. 이때 이미 저장된 preload 이미지를 사용하는 방법과
-#Todo 새로운 스펙트럼을 열어서 비교하는 방법을 사용한다.
+
+#Todo 새로운 스펙트럼을 열어서 비교하는 방법을 사용한다. 이때 https://physics.nist.gov/의 정보를 받아와서 스펙트럼을 만드는 방법을 생각해 보자(기본
+# 적으로 Relative intensity가 있으니 스펙트럼화해서 쓰면 될 것이다!
+
 
 #호에엥
 #1. standardSpectrumCanvas가 선택된 상태에서 axvline을 더블클릭하면 그 라인의 색깔이 바뀌고,
 #2. selfSpectrumCanvas에 같은 색깔의 긴 axvline이 생긴다. 이건 마우스 따라 움직이고  selfSpectrumCanvas axvline 근처에 가져다되면 달라붙는다.
 #3. 마우스 우클릭시 과정 초기화-> 1. 전으로 이동
 #4. 달라붙었을때 더블클릭하면 해당 정보가 저장되고 왼쪽 테이블에 뜬다.
+#Todo 패턴매칭 알고리즘을 사용해 자동으로 비슷한 이미지구간을 찾아주는 기능도 구현해보자
+#vs
+#Todo https://github.com/jveitchmichaelis/rascal/blob/master/rascal/calibrator.py hough transform
+# 허프 트렌스폼은 직선을 찾는 알고리즘인데 상대적으로 많은 Wavelength emission값이랑 상대적으로 적은
+# pixel peak 값을 매칭해주는 직선(wavelength/pixel 그래프의 직선)을 찾아주는거 같다
+# 참고해서 자동매칭되게 하고 그 매칭된 정보를 직접 수정해 사용할 수 있도록 하자
 
 
 class identificationWidget(QMainWindow):
@@ -65,7 +74,9 @@ class identificationWidget(QMainWindow):
         self.standardSpectrum = []
         self.selfSpectrum = []
         self.currentPickedPeakWavelength = 0
-        self.selfFWHM = 4
+        self.selfFWHM = 2
+        self.REIDYStep = 2
+        self.selfImageY = [0,0]
         self.initUI()
 
     def initUI(self):
@@ -91,7 +102,7 @@ class identificationWidget(QMainWindow):
         self.peakDistanceSlider.setValue(self.peakDistance)
         self.peakNumberSlider.setRange(1, 10)
         self.peakThresholdSlider = QSlider(Qt.Horizontal, self)
-        self.peakThresholdSlider.setValue(self.peakThreshold*100)
+        self.peakThresholdSlider.setValue(int(self.peakThreshold*100))
         self.peakNumberSlider.setRange(1, 100)
 
         self.peakNumberLabel = QLabel(f'Number of Peak = {self.peakNumber}')
@@ -132,6 +143,7 @@ class identificationWidget(QMainWindow):
         self.selfSpectrumCanvas.mpl_connect("button_press_event", self.onPressAtSelfSpectrum)
         self.selfSpectrumCanvas.mpl_connect("motion_notify_event", self.onMoveAtSelfSpectrum)
         self.selfSpectrumCanvas.mpl_connect("button_release_event", self.onReleaseAtSelfSpectrum)
+
 
         self.selfSpectrumGaussFitFig = plt.Figure(figsize=(7, 7))
         self.selfSpectrumGaussFitCanvas = FigureCanvas(self.selfSpectrumGaussFitFig)
@@ -183,6 +195,8 @@ class identificationWidget(QMainWindow):
 
 
 
+        self.gaussButton = QPushButton('&GuassFit')
+        self.gaussButton.clicked.connect(self.selfSpectrumDrawWithGauss)
 
         self.matchButton = QPushButton('&Match')
         self.matchButton.clicked.connect(self.onMatch)
@@ -190,12 +204,16 @@ class identificationWidget(QMainWindow):
         self.abortButton.clicked.connect(self.onAbort)
         self.exportButton = QPushButton('&Export')
         self.exportButton.clicked.connect(self.onExport)
+        self.importButton = QPushButton('&Import')
+        self.importButton.clicked.connect(self.onImport)
+
 
         self.tableMatchingButtons = QWidget()
         self.tableMatchingButtonLayout = QVBoxLayout()
         self.tableMatchingButtonLayout.addWidget(self.matchButton)
         self.tableMatchingButtonLayout.addWidget(self.abortButton)
         self.tableMatchingButtonLayout.addWidget(self.exportButton)
+        self.tableMatchingButtonLayout.addWidget(self.importButton)
         self.tableMatchingButtons.setLayout(self.tableMatchingButtonLayout)
 
 
@@ -211,6 +229,7 @@ class identificationWidget(QMainWindow):
         self.splitter = QSplitter(Qt.Horizontal)
         self.tables = QWidget()
         self.tableLayout = QVBoxLayout()
+        self.tableLayout.addWidget(self.gaussButton)
         self.tableLayout.addWidget(self.wavelengthPixelTable)
         self.tableLayout.addWidget(self.tableMatchingButtons)
         self.tables.setLayout(self.tableLayout)
@@ -294,14 +313,28 @@ class identificationWidget(QMainWindow):
 
     '''
     칼리브레이션 스펙트럼 그래프에서 pickPeak 메소드를 통해 생성된 peakPicker를 움직이고 그 값을 table에 저장하는 메소드
-    peakPicker를 클릭한 채로 끌어서 움직일 수 있고 마우스를 놓으면 위치가 고정된다.
-    peak 근처 peakDistance 픽셀에서는 자동으로 peak에 붙고 이때 색깔이 연두색으로 바뀐다. 
+    두 가지 방식으로 peakPicker를 움직일 수 있다. 
+    1. Drag and Drop :
+        peakPicker를 클릭한 채로 끌어서 움직일 수 있고 마우스를 놓으면 위치가 고정된다. 
+        peak 근처 peakDistance 픽셀에서는 자동으로 peak에 붙고 이때 색깔이 연두색으로 바뀐다. 
+        마우스가 이동할때 그 픽셀값이 저장된다. 
+    2. Double Click :
+        selfSpectrum의 Peak의 text를 더블클릭하면 peakPicker 그 text로 이동하고 그 픽셀값이 저장된다. 
     '''
 
     def onPickPeakAtSelfSpectrum(self, event):
+        if self.isMatchFinished: return
         if self.isPicked: return
+        if (event.mouseevent.dblclick and event.artist!=self.peakPicker):
+            val = round(float(event.artist.get_text()), 4)
+            self.wavelengthPixelList.loc[
+                self.wavelengthPixelList.Wavelength == self.currentPickedPeakWavelength, 'Pixel'] = val
+            self.peakPicker.remove()
+            self.peakPicker = self.selfSpectrumAx.axvline(val, color='green', picker=True, pickradius=self.pickDistance)
+            self.selfSpectrumAx.figure.canvas.draw()
+            self.onChangedList()
+            return
         if not event.mouseevent.button == 1 :return
-        print(self.isPicked)
         self.isPicked = True
 
     def onMoveAtSelfSpectrum(self, event):
@@ -330,7 +363,6 @@ class identificationWidget(QMainWindow):
         if event.inaxes != self.selfSpectrumAx: return
         if not self.isPicked: return
         self.isPicked = False
-        print('release')
 
     '''
     칼리브레이션 스펙트럼 그래프에서 우클릭을 하면 pickPeak과정을 취소하는 메소드
@@ -401,7 +433,7 @@ class identificationWidget(QMainWindow):
                                                            rotation=90, clip_on=True, c='blue',
                                                            bbox=dict(facecolor='white', ec='none'))
         if (mouse is None) :
-            xshift = [(self.selfSpectrumAx.get_xlim()[1] - self.selfSpectrumAx.get_xlim()[0]) / 2 , 0]
+            xshift = [(self.selfSpectrumAx.get_xlim()[1] - self.selfSpectrumAx.get_xlim()[0]) / 2 + self.selfSpectrumAx.get_xlim()[0] , 0]
         else:
             xshift = self.selfSpectrumAx.transData.inverted().transform((mouse.x, 0))
         self.peakPicker = self.selfSpectrumAx.axvline(xshift[0], color='blue', picker=True , pickradius = self.pickDistance)
@@ -413,9 +445,17 @@ class identificationWidget(QMainWindow):
     '''
     pickPeak을 완료하기 위한 메소드 
     매치가 완료되었으면(onMatch) 해당 내용을 리스트에 저장하고 강제종료시(onAbort) 저장하지 않는다. 
+    테이블 아래있는 버튼 (Match, Abort)을 클릭하거나 selfSpectrumFigure 위에서 키(m on Match, a on Abort)를 누르면 완료된다. 
 
     '''
-    #Todo onExport시 매칭 내용을 csv 파일로 저장하는 기능을 구현
+
+    def keyPressEvent(self, event):
+        if self.isMatchFinished: return
+        elif event.key() == Qt.Key_M:
+            self.onMatch()
+        elif event.key() == Qt.Key_A:
+            self.onAatch()
+
 
     def onMatch(self):
         print('match')
@@ -428,7 +468,13 @@ class identificationWidget(QMainWindow):
         self.onChangedList()
 
     def onExport(self):
-        print('export')
+        path = QFileDialog.getSaveFileName(self, 'Choose save file location and name ','./', "CSV files (*.csv)")[0]
+        self.wavelengthPixelList.to_csv(path, index=False)
+
+    def onImport(self):
+        file = QFileDialog.getOpenFileName(self, 'Choose match file','./', "CSV files (*.csv)")[0]
+        self.wavelengthPixelList = pd.read_csv(file)
+        self.onChangedList()
 
     def onPressAtStandardSpectrum(self, event):
         if(event.button == 3):
@@ -482,6 +528,8 @@ class identificationWidget(QMainWindow):
         self.isPressed = False
 
 
+    def selfSpectrumDrawWithGauss(self ):
+        self.selfSpectrumGaussShow(self.selfSpectrum, self.selfPeakPixs)
 
 
     def selfSpectrumDraw(self, ymin, ymax, data, args):
@@ -498,11 +546,27 @@ class identificationWidget(QMainWindow):
         peakPixs = peak_local_max(identify, indices=True, num_peaks=NMAX_PK,
                                   min_distance=MINSEP_PK,
                                   threshold_abs=max_intens * MINAMP_PK + ground)
+        newPeakPixs = []
+        for peakPix in peakPixs:
+            newPeakPixs.append(peakPix[0])
+        peakPixs = newPeakPixs
 
         self.selfPeakPixs = np.array(peakPixs)
         self.selfSpectrum = np.array(identify)
 
-        self.selfSpectrumGaussShow(identify, peakPixs)
+
+        for i in peakPixs:
+            self.selfSpectrumAx.axvline(i, identify[i] / max(identify) + 0.0003, identify[i] / max(identify) + 0.2, color='c')
+            if (identify[i] + max(identify) / 2.85> max(identify)):
+                self.selfSpectrumAx.text(i, identify[i] + max(identify) / 2000, str(i), clip_on=False, picker = self.pickDistance)
+            else:
+                self.selfSpectrumAx.text(i, identify[i] + max(identify) / 2.85, str(i), ha= 'center', va= 'center',
+                                         rotation=90, clip_on=True, picker = self.pickDistance)
+
+        self.selfSpectrumAx.plot(identify, color='r')
+        self.selfSpectrumAx.set_xlim(0, len(identify))
+        self.selfSpectrumAx.set_ylim(0, )
+        self.selfSpectrumAx.figure.canvas.draw()
 
 
 
@@ -517,44 +581,127 @@ class identificationWidget(QMainWindow):
 
 #Todo 이거 잘 빼는 방법(바닥값에 맞게 잘 빼는 방법)을 찾아보자.
     def selfSpectrumGaussDraw(self, identify, peakPixs):
-        iterations  = 5
+        iterations  = 3
+
         fitter = LevMarLSQFitter()
         self.selfSpectrumGaussFitFig.clear()
         identify = identify - np.median(identify[0:100]) ##여기!
         for i in np.arange(iterations ):
-            ax = self.selfSpectrumGaussFitFig.add_subplot(1, iterations, i+1)
-            peakPix = peakPixs[i][0]
+            a = int(iterations / 5)
+            if  iterations % 5 != 0 : a = a+1
+
+            ax = self.selfSpectrumGaussFitFig.add_subplot(a, 5, i+1)
+            peakPix = peakPixs[-i]
             xs = np.arange(peakPix - int(self.selfFWHM) * 5, peakPix + int(self.selfFWHM) * 5 + 1)
+
+
             g_init = Gaussian1D(amplitude=identify[peakPix],
                                 mean=peakPix,
                                 stddev=self.selfFWHM * gaussian_fwhm_to_sigma,
                                 bounds={'amplitude': (0, 2 * identify[peakPix]),
                                         'mean': (peakPix - self.selfFWHM, peakPix + self.selfFWHM),
                                         'stddev': (0, self.selfFWHM)})
+
             ax.set_ylim(0,max(identify)*1.1)
             fitted = fitter(g_init, xs, identify[xs])
+            ax.set_xlim(peakPix - fitted.stddev/gaussian_fwhm_to_sigma*2 , peakPix + fitted.stddev/gaussian_fwhm_to_sigma*2 )
             ax.plot(xs, identify[xs], 'b')
             xss = np.arange(peakPix - self.selfFWHM * 5, peakPix + self.selfFWHM * 5 + 1, 0.01)
             ax.plot(xss, fitted(xss), 'r--')
             ax.figure.canvas.draw()
 
+    def spectrumGaussFit(self, identify, peakPixs):
+        #
+        return peak_gauss
+
 
     def selfSpectrumGaussFit(self, identify, peakPixs):
-        x_identify = np.arange(len(identify))
+
+
+        self.selfSpectrumFig.clear()
+        self.selfSpectrumAx = self.selfSpectrumFig.add_subplot(111)
+
+
         fitter = LevMarLSQFitter()
+
+        sortedPeakPixs = np.sort (peakPixs)
+        ground = np.median(identify[0:100])
+        identify_fit = identify - ground ## 여기도!
+
         peak_gauss = []
+        i = 0
+        x_identify = np.arange(len(identify_fit))
         for peakPix in peakPixs:
-            peakPix = peakPix[0]
-            g_init = Gaussian1D(amplitude=identify[peakPix],
+            g_init = Gaussian1D(amplitude=identify_fit[peakPix],
                                 mean=peakPix,
                                 stddev=self.selfFWHM * gaussian_fwhm_to_sigma,
-                                bounds={'amplitude': (0, 2 * identify[peakPix]),
+                                bounds={'amplitude': (identify_fit[peakPix], 2 * identify_fit[peakPix]),
                                         'mean': (peakPix - self.selfFWHM, peakPix + self.selfFWHM),
                                         'stddev': (0, self.selfFWHM)}
                                 )
-            fitted = fitter(g_init, x_identify, identify)
+            fitted = fitter(g_init, x_identify, identify_fit)
+            xss = np.arange(peakPix - int(self.selfFWHM) * 3, peakPix + int(self.selfFWHM) * 3 + 1, 0.01)
+            self.selfSpectrumAx.plot(xss, fitted(xss) + ground, 'royalblue')
+
             peak_gauss.append(fitted.mean.value)
+            identify_fit = identify_fit - fitted(np.arange(len(identify)))
+
+
+
+        '''
+        while i < len(sortedPeakPixs)-1:
+            peakPix = sortedPeakPixs[i]
+            try:
+                peakPix2 = sortedPeakPixs[i + 1]
+            except:
+                peakPix2 = int(peakPix + self.selfFWHM * 10)
+
+            xs = np.arange(peakPix - int(self.selfFWHM) * 3, peakPix2 + int(self.selfFWHM) * 3 + 1)
+            g_init = Gaussian1D(amplitude=identify_fit[peakPix],
+                                mean=peakPix,
+                                stddev=self.selfFWHM * gaussian_fwhm_to_sigma,
+                                bounds={'amplitude': (0, 2 * identify_fit[peakPix]),
+                                        'mean': (peakPix - self.selfFWHM, peakPix + self.selfFWHM),
+                                        'stddev': (0, self.selfFWHM)}
+                                )+\
+                     Gaussian1D(amplitude=identify_fit[peakPix2],
+                                mean=peakPix2,
+                                stddev=self.selfFWHM * gaussian_fwhm_to_sigma,
+                                bounds={'amplitude': (0, 2 * identify_fit[peakPix2]),
+                                        'mean': (peakPix2 - self.selfFWHM, peakPix2 + self.selfFWHM),
+                                        'stddev': (0, self.selfFWHM)}
+                                )
+            fitted = fitter(g_init, xs, identify_fit[xs])
+
+
+
+            # fit 한 두 값이 mean 차이가  시그마의 합의 3배 보다 크면 1D fit
+            if (fitted.mean_1.value - fitted.mean_0.value > 3* ( fitted.stddev_1 + fitted.stddev_0) ) :
+                xs = np.arange(peakPix - int(self.selfFWHM) * 3, peakPix + int(self.selfFWHM) * 3 + 1)
+                g_init = Gaussian1D(amplitude=identify_fit[peakPix],
+                                    mean=peakPix,
+                                    stddev=self.selfFWHM * gaussian_fwhm_to_sigma,
+                                    bounds={'amplitude': (0, 2 * identify_fit[peakPix]),
+                                            'mean': (peakPix - self.selfFWHM, peakPix + self.selfFWHM),
+                                            'stddev': (0, self.selfFWHM)}
+                                    )
+                fitted = fitter(g_init, xs, identify_fit[xs])
+                xss = np.arange(peakPix - int(self.selfFWHM) * 3, peakPix + int(self.selfFWHM) * 3 + 1, 0.01)
+                self.selfSpectrumAx.plot(np.arange(len(identify)), fitted(np.arange(len(identify))) + ground, 'royalblue')
+                peak_gauss.append(fitted.mean.value)
+                i+=1
+            else:
+                peak_gauss.append(fitted.mean_0.value)
+                peak_gauss.append(fitted.mean_1.value)
+                xss = np.arange(peakPix - int(self.selfFWHM) * 3, peakPix2 + int(self.selfFWHM) * 3 + 1, 0.01)
+                self.selfSpectrumAx.plot(xss, fitted(xss) + ground, 'yellowgreen')
+                i += 2
+
+        print(len(peak_gauss))
+        print(len(sortedPeakPixs))
+        '''
         peak_gauss = np.round(peak_gauss, 4)
+
 
         for i, j in zip(peakPixs, peak_gauss):
             self.selfSpectrumAx.axvline(j, identify[i] / max(identify) + 0.0003, identify[i] / max(identify) + 0.2, color='c')
@@ -564,7 +711,7 @@ class identificationWidget(QMainWindow):
                 self.selfSpectrumAx.text(j, identify[i] + max(identify) / 2.85, str(j), ha= 'center', va= 'center',
                                          rotation=90, clip_on=True, picker = self.pickDistance)
 
-        self.selfSpectrumAx.plot(identify, color='r')
+        self.selfSpectrumAx.plot(identify, 'r--')
         self.selfSpectrumAx.set_xlim(0, len(identify))
         self.selfSpectrumAx.set_ylim(0, )
         self.selfPeakPixs = np.array(peak_gauss)
@@ -587,12 +734,41 @@ class identificationWidget(QMainWindow):
 
 
 
-    def doFit(self):
+    def doFit(self, ystep=2):
         spectrum = self.selfSpectrum
-        list = self.wavelengthPixelList
+        matchList = self.wavelengthPixelList
+        matchList = matchList[matchList.Pixel != 0]
+        ymin = self.selfImageY[0]
+        ymax = self.selfImageY[1]
+        data = self.selfData[ymin:ymax, :]
+        regFactor = pd.DataFrame({'Slope' : [], 'Intercept': []})
+        for i in np.arange(len(data) / ystep):
+            i = int(i)
+            if (i * ystep + ystep - 1 > len(data)):
+                dat = np.average(data[ystep * i:len(data) - 1, :], axis=0)
+            else:
+                dat = np.average(data[ystep * i:ystep * i + ystep - 1, :], axis=0)
+            ground = np.median(dat[0:100])
+            dat_fit = dat - ground
+            x_dat = np.arange(len(dat_fit))
+            peakGauss = []
+            for peakPix in matchList['Pixel']:
+                peakPix = int(peakPix)
+                g_init = Gaussian1D(amplitude=dat_fit[peakPix],
+                                    mean=peakPix,
+                                    stddev=self.selfFWHM * gaussian_fwhm_to_sigma,
+                                    bounds={'amplitude': (dat_fit[peakPix], 2 * dat_fit[peakPix]),
+                                            'mean': (peakPix - self.selfFWHM, peakPix + self.selfFWHM),
+                                            'stddev': (0, self.selfFWHM)})
+                fitted = fitter(g_init, x_dat, dat_fit)
 
-
-
+                peakGauss.append(fitted.mean.value)
+                dat_fit = dat_fit - fitted(x_dat)
+            res = stats.linregress(peakGauss, matchList['Wavelength'])
+            regAdd = pd.DataFrame({'Slope' : [res.slope], 'Intercept': [res.intercept]})
+            for j in range(ystep):
+                if len(regFactor)>=len(data) : continue
+                regFactor = regFactor.append(regAdd, ignore_index=True)
 
     def standardSpectrumDraw(self, data, arc, peaks=[]):
         wavelength = data[0]
@@ -613,7 +789,7 @@ class identificationWidget(QMainWindow):
             else:
                 self.standardSpectrumAx.text(i, flux[np.where(i == wavelength)][0] + max(flux) / 2.85, str(i),
                          ha='center', va='center', rotation=90, clip_on=True, picker = self.pickDistance)
-        self.standardSpectrumAx.plot(wavelength, flux, color='r')
+        self.standardSpectrumAx.plot(wavelength, flux, 'r--')
         self.standardSpectrumAx.set_ylim(0, )
         self.standardSpectrumAx.set_xlim(min(wavelength), max(wavelength))
         self.standardPeakWavelengths = np.array(peaks)
