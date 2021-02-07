@@ -50,148 +50,7 @@ from scipy import stats
 #2. selfSpectrumCanvas에 같은 색깔의 긴 axvline이 생긴다. 이건 마우스 따라 움직이고  selfSpectrumCanvas axvline 근처에 가져다되면 달라붙는다.
 #3. 마우스 우클릭시 과정 초기화-> 1. 전으로 이동
 #4. 달라붙었을때 더블클릭하면 해당 정보가 저장되고 왼쪽 테이블에 뜬다.
-#Todo 패턴매칭 알고리즘을 사용해 자동으로 비슷한 이미지구간을 찾아주는 기능도 구현해보자
-#vs
-#Todo https://github.com/jveitchmichaelis/rascal/blob/master/rascal/calibrator.py hough transform
-# 허프 트렌스폼은 직선을 찾는 알고리즘인데 상대적으로 많은 Wavelength emission값이랑 상대적으로 적은
-# pixel peak 값을 매칭해주는 직선(wavelength/pixel 그래프의 직선)을 찾아주는거 같다
-# 참고해서 자동매칭되게 하고 그 매칭된 정보를 직접 수정해 사용할 수 있도록 하자
 
-#Todo 다른 피팅방식(체비세프라던가)을 적용해 보자.
-
-
-class REIDentifier():
-    def __init__(self, matchList : pd.DataFrame , flux: np.array,  fitMethod = 'linear', FWHM = 2):
-        self.matchList = matchList
-        self.fitter = fitMethod
-        self.flux = flux
-        self.ystep = 1
-        self.regFactor = None
-        self.wavelength = None
-        self.fittingPoints = pd.DataFrame({'XPixel' : [], 'YPixel' : [], 'Wavelength': []})
-        self.FWHM = FWHM
-        '''
-        do Reidentification with matching information(matchlist) and array of comp image flux(flux)
-        default setting is do linear fitting along the x axis of the image
-        need to impliment another way of fiting. 
-        '''
-
-    def fittedWavelength(self, x,y):
-        regFactor = self.regFactor
-        if self.fitter == 'linear':
-            slope =  regFactor['Slope'][y]
-            intercept = regFactor['Intercept'][y]
-            wavelength = x*slope+intercept
-        return wavelength
-
-    def doFit(self, fitMethod = None):
-        if fitMethod is not None:
-            self.fitter = fitMethod
-
-        if self.fitter == 'linear':
-            matchList = self.matchList
-            matchList = matchList[matchList.Pixel != 0]
-            ystep = self.ystep
-            data = self.flux
-            fwhm = self.FWHM
-            regFactor = pd.DataFrame({'Slope' : [], 'Intercept': []})
-            fittingPoints = pd.DataFrame({'XPixel': [], 'YPixel': [], 'Wavelength': []})
-            wavelength = []
-            xPixel = np.arange(len(data[0]))
-            fitter = LevMarLSQFitter()
-            max = int(len(data) / ystep)
-
-            for i in np.arange(len(data) / ystep):
-                i = int(i)
-                if (ystep == 1):
-                    dat = data[i,:]
-                elif (i * ystep + ystep - 1 > len(data)):
-                    dat = np.average(data[ystep * i:len(data) - 1, :], axis=0)
-                else:
-                    dat = np.average(data[ystep * i:ystep * i + ystep - 1, :], axis=0)
-                ground = np.median(dat[0:100])
-                dat_fit = dat - ground
-                peakGauss = []
-                for peakPix in matchList['Pixel']:
-                    peakPix = int(peakPix)
-                    g_init = Gaussian1D(amplitude=dat_fit[peakPix],
-                                        mean=peakPix,
-                                        stddev=fwhm * gaussian_fwhm_to_sigma,
-                                        bounds={'amplitude': (dat_fit[peakPix], 2 * dat_fit[peakPix]),
-                                                'mean': (peakPix - fwhm, peakPix + fwhm),
-                                                'stddev': (0, fwhm)})
-                    fitted = fitter(g_init, xPixel, dat_fit)
-
-                    peakGauss.append(fitted.mean.value)
-                    dat_fit = dat_fit - fitted(xPixel)
-
-                res = stats.linregress(peakGauss, matchList['Wavelength'])
-                regAdd = pd.DataFrame({'Slope' : [res.slope], 'Intercept': [res.intercept]})
-                pointAdd = pd.DataFrame({'XPixel': peakGauss, 'YPixel': np.full(len(peakGauss), i*ystep), 'Wavelength' : matchList['Wavelength']})
-
-                for j in range(ystep):
-                    if len(regFactor)>=len(data) : continue
-                    regFactor = regFactor.append(regAdd, ignore_index=True)
-                    fittingPoints = fittingPoints.append(pointAdd, ignore_index=True)
-                    wave = xPixel*res.slope + res.intercept
-                    wavelength.append(wave)
-
-        self.fittingPoints = fittingPoints
-        self.regFactor = regFactor
-        self.wavelength = np.array(wavelength)
-        '''
-        xPixel, YPixel, wavelength를 X,Y,Z 축으로 가지는 3축 좌표평면에 실제 fitting 이 일어난 각 ypixel과  gauss
-        fitting을 통해 직접 fitting에 사용된 xpixel을 x,y 값으로, matchList['Wavelength'] 를 z값으로 사용해 
-        처음 데이터를 plot하고 최종값을 plot해 fitting result와 그 residual을 보여준다. 
-        
-        '''
-    def fitPlot3D(self, fig = None):
-        fittingPoints = self.fittingPoints
-        wavelength = self.wavelength
-        if fig is None:
-            fig = plt.figure()
-        ax = fig.add_subplot(111, projection = '3d')
-        xPix = fittingPoints['XPixel']
-        yPix = fittingPoints['YPixel']
-        zPix = fittingPoints['Wavelength']
-        ax.scatter(xPix,yPix,zPix, c = 'r', marker = 'o', s=1)
-        xSpace = np.arange(len(wavelength[0]))
-        ySpace = np.arange(len(wavelength))
-        X, Y = np.meshgrid(xSpace, ySpace)
-        ax.plot_surface(X, Y, wavelength, cmap = 'viridis')
-        axis = len(wavelength[0]) if len(wavelength[0])>=len(wavelength)  else len(wavelength)
-
-        ax.set_xlim3d(0,axis)
-        ax.set_ylim3d(0,axis)
-
-    def fitPlot2D(self, fig = None, xCut = None):
-
-        fittingPoints = self.fittingPoints
-        wavelength = self.wavelength
-
-        if fig is None:
-            fig = plt.figure()
-
-        if xCut is None:
-            imgAx = fig.add_subplot(111)
-        else:
-            imgAx = fig.add_subplot(311)
-        xPix = fittingPoints['XPixel']
-        yPix = fittingPoints['YPixel']
-
-        imgAx.plot(xPix, yPix, 'rx', ms=3)
-
-        imgAx.imshow(wavelength, cmap = 'viridis')
-
-        if xCut is not None:
-            xCutAx = fig.add_subplot(312)
-            residualAx = fig.add_subplot(313)
-            xCutAx.plot(wavelength[xCut] , 'bo')
-            xCutAx.plot(fittingPoints.loc[fittingPoints.YPixel == xCut].XPixel, fittingPoints.loc[fittingPoints.YPixel == xCut].Wavelength, 'rx', ms = 3)
-            imgAx.axhline(xCut, color = 'black')
-            for x in fittingPoints.loc[fittingPoints.YPixel == xCut].XPixel:
-                residualAx.plot(x, fittingPoints.loc [np.logical_and (fittingPoints.YPixel == xCut, fittingPoints.XPixel == x)].Wavelength - self.fittedWavelength(x,xCut), 'rx', ms = 3)
-            residualAx.axhline(0, color = 'blue')
 
 
 class identificationWidget(QMainWindow):
@@ -871,41 +730,7 @@ class identificationWidget(QMainWindow):
 
 
 
-    def doFit(self, ystep=2):
-        spectrum = self.selfSpectrum
-        matchList = self.wavelengthPixelList
-        matchList = matchList[matchList.Pixel != 0]
-        ymin = self.selfImageY[0]
-        ymax = self.selfImageY[1]
-        data = self.selfData[ymin:ymax, :]
-        regFactor = pd.DataFrame({'Slope' : [], 'Intercept': []})
-        for i in np.arange(len(data) / ystep):
-            i = int(i)
-            if (i * ystep + ystep - 1 > len(data)):
-                dat = np.average(data[ystep * i:len(data) - 1, :], axis=0)
-            else:
-                dat = np.average(data[ystep * i:ystep * i + ystep - 1, :], axis=0)
-            ground = np.median(dat[0:100])
-            dat_fit = dat - ground
-            x_dat = np.arange(len(dat_fit))
-            peakGauss = []
-            for peakPix in matchList['Pixel']:
-                peakPix = int(peakPix)
-                g_init = Gaussian1D(amplitude=dat_fit[peakPix],
-                                    mean=peakPix,
-                                    stddev=self.selfFWHM * gaussian_fwhm_to_sigma,
-                                    bounds={'amplitude': (dat_fit[peakPix], 2 * dat_fit[peakPix]),
-                                            'mean': (peakPix - self.selfFWHM, peakPix + self.selfFWHM),
-                                            'stddev': (0, self.selfFWHM)})
-                fitted = fitter(g_init, x_dat, dat_fit)
 
-                peakGauss.append(fitted.mean.value)
-                dat_fit = dat_fit - fitted(x_dat)
-            res = stats.linregress(peakGauss, matchList['Wavelength'])
-            regAdd = pd.DataFrame({'Slope' : [res.slope], 'Intercept': [res.intercept]})
-            for j in range(ystep):
-                if len(regFactor)>=len(data) : continue
-                regFactor = regFactor.append(regAdd, ignore_index=True)
 
     def standardSpectrumDraw(self, data, arc, peaks=[]):
         wavelength = data[0]
@@ -990,6 +815,8 @@ Wavelength=[8780.6, 8495.4, 8377.6, 7438.9,
 flux = B[0].data
 data = flux
 ystep = 3
+reId = reIdentifier(matchList, flux)
+
 
 fitter = LevMarLSQFitter()
 
