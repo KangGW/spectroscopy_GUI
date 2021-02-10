@@ -23,6 +23,8 @@ from mpl_toolkits.mplot3d import Axes3D
 from reIdentificatoinWidget import reIdentifier, fittedWavelength
 from scipy import stats
 from scipy.optimize import curve_fit
+from scipy import signal
+
 import math
 #Todo 읽어볼것
 # http://articles.adsabs.harvard.edu/pdf/1986PASP...98..609H
@@ -55,44 +57,7 @@ C = fits.open("./Spectroscopy_Example/20181023/reduced/r_HD18247_60.0_1.fit")
 # Find
 flux = C[0].data[40:110,300:800]
 
-#%%
 
-
-
-
-
-#점원일 경우 sky를 지정하거나, gaussian+1차함수로 sky/data를 찾고
-
-
-
-#점원이 아닐 경우는 sky를 지정해서 찾자 -> sky 지정만 자동화해줄수 있으면 될거같은데,
-#자 생각해보자
-# sky를 ypixel에 비례하는 값(상수 포함) 이라고 가정하자.
-#일반적으로 sky는 양쪽 끝 중 하나에서 부터는 반드시 나올것이다.
-#이미지를 10부분으로 나눠서 왼쪽 끝/ 오른쪽 끝에서부터 각 부분에 대해 linregress
-#slope가 급격히 증가하거나 감소하는 부분을 이미지 시작과 끝으로 여긴다(어차피 피팅할거니까 실제 이미지랑 거리는
-# (어차피 크게 멀지도 않겠지만) 그렇게 상관 없을것
-#그리고 이미지 부분 말고 나머지에 linregression해서 sky를 찾고
-#이를 이미지에 빼서 object를 찾고 이걸 가우시안(점상)으로 뽑아 더하거나 그냥 더해서 - 면상의 이미지같은 경우는 각 픽셀이 가우시안으로 퍼지는걸 고려해서 해야되나?
-#extract
-#이때 각 픽셀당 주어지는 값을 gaussian으로 그냥 더하거나 optimal extraction 해서 extraction 한다.
-
-#과정
-#aptrace -> peak 값과 sky fitting을 사용해 aperture의 중심과 gaussian을 찾고, aperture의 중심을 수식으로 표현한다(fitting한다)
-#지금은 aperture의 중심에 따라 일관된 wavelength값을 y slice마다 사용하는데,
-#근데 생각을 해보면, 만약 y 값에 따라 wavelength가 일정하지 않다면, 같은 x값에서 일정한 wavelength를 사용하는것도 틀리지 않을까 싶다
-#그리고 aperture 중심에 대해 sky가 빠진 구간을 gauss fitting 해서 한 yslice의 wavelength에 대한 adu 총합을 구한다. -> extraction
-
-#>> 표준화
-#이걸 exp로 나누고(adu니까) 표준성의 spectrum과 비교해서 wavelength에 따른 sensitivity 그래프를 그린 다음에
-#sensitivity 를 관측대상 스펙트럼에 곱해서
-#결과를 도출한다.
-#이상.
-
-#1. Aptrace. 받는건 regFactor, Image(Cutted well)
-# 내놓는건 aperture fit and/or aperture pixels
-
-#점상에 대해 먼저
 #Todo fitting 관련된거 다 scipy optimize curvefit으로 바꾸자
 def gaussian(x, amplitude, mean, stddev ):
     return (amplitude *stddev*np.sqrt(2*np.pi) / np.exp(0))* 1/ (stddev * np.sqrt(2*np.pi )) * np.exp( - (x-mean)**2 / (2*stddev**2) )
@@ -104,46 +69,145 @@ def skyImage(x, slope, intercept, amplitude, mean, stddev):
 
 
 
-C = fits.open("./Spectroscopy_Example/20181023/reduced/r_HD18247_60.0_1.fit")
-# Find AP points
+C = fits.open("./Spectroscopy_Example/20181023/reduced/r_HD216604_60.0_9.fit")
+
+
 flux = C[0].data[40:110,300:800]
 xFlux = np.arange(len(flux[0]))
+xxFlux =  np.arange(0, len(flux[0]), 0.01)
 yFlux = np.arange(len(flux))
+xyFlux = np.arange(0, len(flux), 0.01)
+numYSlicer = 8
+
+skyFit = linearSky
+
+
 #wavelength = fittedWavelength(xFlux, yFlux, regFactor, fitMethod)
 skysubtractedFlux = []
 apertureCoeffs = []
 apertures = []
+aperturePointsFig = plt.figure()
+imgAx = aperturePointsFig.add_subplot(411)
+guessAx = aperturePointsFig.add_subplot(412)
+fitAx = aperturePointsFig.add_subplot(413)
+subImgAx = aperturePointsFig.add_subplot(414)
+imgAx.imshow(flux)
 for i in range(len(flux[0])):
+
+    guessAx.clear()
+    fitAx.clear()
     fluxNow = flux[:,i]
+    #find initial guess for mean value in image gaussian mean
+    peaks,_ = signal.find_peaks(fluxNow)
+    prominences = signal.peak_prominences(fluxNow, peaks)[0]
+    peakPixGuess = peaks[np.argmax(prominences)]
+    imgAx.plot(i, peakPixGuess, 'r+', ms = 5, label = 'initial guess on gauss peak')
+    #find initial guess for linear sky
+    #extract gaussian and linear fit
+    #peakPix 주변 FWHM 3배 만큼의 픽셀을 뺀 후에 linearfit
+    yObj = np.arange(peakPixGuess - FWHM * 2, peakPixGuess + FWHM * 2)
+    ySky = np.delete(yFlux, yObj)
+    fluxSky = np.delete(fluxNow, yObj)
+
+    guessAx.plot(yFlux, fluxNow , 'r-')
+
+    interceptGuess = fluxSky[0]
+    slopeGuess = (fluxSky[-1] - fluxSky[0]) / len(fluxSky)
+
+    try:
+        poptSky, pcov = curve_fit(skyFit, ySky, fluxSky, [slopeGuess, interceptGuess])
+    except:
+        poptSky = [0,0]
+    slopeGuess = poptSky[0]
+    interceptGuess = poptSky[1]
+    guessAx.plot(xyFlux, skyFit(xyFlux, *poptSky), 'y--')
+
+    #gaussGuess plot after extraction of sky
+    gaussGuessFlux = fluxNow -skyFit(yFlux, *poptSky)
+
+    try:
+        poptGauss, pcov = curve_fit(gaussian, yFlux, gaussGuessFlux, [gaussGuessFlux[peakPixGuess], peakPixGuess, FWHM*gaussian_fwhm_to_sigma])
+    except:
+        poptGauss= [0,0,0]
+
+    guessAx.plot(xyFlux, gaussian(xyFlux, *poptGauss), 'y--')
+    guessAx.plot(xyFlux, skyImage(xyFlux, *poptSky, *poptGauss), 'b--')
+
+    amplitudeGuess = poptGauss[0]
+    meanGuess = poptGauss[1]
+    stddevGuess = poptGauss[2]
+
+    try:
+        poptFin, pcov = curve_fit(skyImage, yFlux, fluxNow, [slopeGuess,interceptGuess, amplitudeGuess,meanGuess,stddevGuess ])
+    except:
+        poptFin= [0,0,0,0,0]
+
+    fitAx.plot(yFlux, fluxNow, 'r-')
+    fitAx.plot(xyFlux, skyImage(xyFlux, *poptFin), 'b--')
+
+    '''
     #plt.plot(fluxNow)
     #plt.axvline(peak_local_max(flux[:,i])[0][0])
     x = np.arange(len(fluxNow))
     fwhm = 2
-    peakPix = peak_local_max(flux[:,i])[0][0]
-    popt, pcov = curve_fit(skyImage, x, fluxNow, [0,0, fluxNow[peakPix], peakPix, 2*gaussian_fwhm_to_sigma])
-    xx  = np.arange(0, len(fluxNow), 0.01)
-    #plt.plot(xx, skyImage(xx, *popt))
-    #plt.plot(xx, linearSky(xx, *popt[:2]) )
-    #plt.plot(xx, gaussian(xx, *popt[2:]) )
-    skysubtractedFlux.append(fluxNow - linearSky(x, *popt[:2]))
-    apertureCoeffs.append(popt)
-    apertures.append(popt[3])
+
+    fluxLen = len(fluxNow)
+    slopes = []
+    intercepts = []
+    for fluxSlice, xSlice in zip(np.array_split(fluxNow, numYSlicer), np.array_split(yFlux, numYSlicer)):
+        result = stats.linregress(xSlice, fluxSlice)
+        plt.plot(xSlice, xSlice*result.slope+result.intercept)
+        slopes.append(result.slope)
+        intercepts.append(result.intercept)
+    slopes = np.array(slopes)
+    slopeMask = np.argmax(np.abs(slopes - np.median(slopes)))
+    slopes = np.delete(slopes, slopeMask)
+    intercepts = np.delete(intercepts, slopeMask)
+
+    slope = np.mean(slopes)
+    intercept = np.mean(intercepts)
+    skysubtractedFluxNow = fluxNow - (slope*yFlux + intercept)
+
+    plt.plot(skysubtractedFluxNow)
+    peakPix = peak_local_max(skysubtractedFluxNow)[0][0]
+
+
+    try:
+        popt, pcov = curve_fit(gaussian, x, skysubtractedFluxNow, [skysubtractedFluxNow[peakPix], peakPix, 2*gaussian_fwhm_to_sigma])
+    except:
+        popt= [0,0,0]
+    '''
+
+
     #plt.plot(fluxNow)
     #print(popt[3])
-    plt.plot( i, popt[3], 'k+', ms = 3)
+    imgAx.plot( i, poptFin[3], 'k+', ms = 3, label = 'final Aperture')
+    skysubtractedFluxNow = fluxNow - (poptFin[0] * yFlux + poptFin[1])
+
+    apertureCoeffs.append(poptFin)
+    apertures.append(poptFin[3])
+    skysubtractedFlux.append(skysubtractedFluxNow)
+
+
 skysubtractedFlux = np.array(skysubtractedFlux)
 apertures = np.array(apertures)
 apertureCoeffs = np.array(apertureCoeffs)
 skysubtractedFlux = skysubtractedFlux.T
-plt.imshow(skysubtractedFlux)
+subImgAx.imshow(skysubtractedFlux)
+
 
 fitMethod = 'chebyshev'
 fitDeg = 3
-sigmaATFitMask = 3
+sigmaATFitMask = 2
 itersATFitMask = 2
 itersATFit = 3
 # APTrace with chebyshev(or polynomial)
 # Extract itersATFit iteratively as mask the sigma( Maybe not useful after iter>3)
+
+apertureTraceFig = plt.figure()
+
+
+firstAx = apertureTraceFig.add_subplot(311)
 
 
 if (fitMethod=='chebyshev'):
@@ -157,9 +221,11 @@ elif (fitMethod == 'polynomial'):
 fitted = fitter(xFlux, apertures, fitDeg)
 xxFlux = np.arange(0, len(flux[0]), 0.001)
 fitVal = valFunc(xxFlux, fitted)
-plt.plot(xFlux, apertures, 'k+')
-plt.plot(xxFlux, fitVal)
+firstAx.plot(xFlux, apertures, 'k+')
+firstAx.plot(xxFlux, fitVal, 'g--')
+firstAx.imshow(skysubtractedFlux)
 
+secondAx = apertureTraceFig.add_subplot(312)
 #Extract abnormals by sigmaClip and refit
 for iATFit in range(itersATFit):
     clip_mask = sigma_clip(apertures - valFunc(xFlux, fitted), sigma=sigmaATFitMask, maxiters=itersATFitMask).mask
@@ -167,9 +233,20 @@ for iATFit in range(itersATFit):
     xxFlux = np.arange(0, len(flux[0]), 0.001)
     xfitVal = valFunc(xxFlux, fitted)
     fitVal = valFunc(xFlux, fitted)
-plt.plot(xFlux[~clip_mask], apertures[~clip_mask], 'k+')
-plt.plot(xFlux[clip_mask], apertures[clip_mask], 'rx')
-plt.plot(xxFlux, xfitVal)
+
+secondAx.plot(xFlux[~clip_mask], apertures[~clip_mask], 'k+')
+secondAx.plot(xFlux[clip_mask], apertures[clip_mask], 'rx')
+secondAx.plot(xxFlux, xfitVal, 'g--')
+secondAx.imshow(skysubtractedFlux)
+
+residualAx = apertureTraceFig.add_subplot(313)
+residualAx.plot(xFlux[~clip_mask], apertures[~clip_mask] - fitVal[~clip_mask], 'k+')
+residualAx.plot(xFlux[clip_mask], apertures[clip_mask] - fitVal[clip_mask], 'rx')
+residualAx.axhline(0, color= 'g', linestyle = '--')
+residualAx.set_ylim(-0.5,0.5)
+
+wavelengthFig = plt.figure()
+ax = wavelengthFig.add_subplot(111)
 # gauss Sum
 wavelength = []
 aduSum = []
@@ -178,7 +255,7 @@ for x, y in enumerate(fitVal):
     aduSum.append(1 / np.sqrt(2 * np.pi) * apertureCoeffs[x][2])
 wavelength = np.array(wavelength)
 aduSum = np.array(aduSum)
-plt.plot(wavelength,aduSum)
+ax.plot(wavelength,aduSum)
 
 #real sum
 wavelength = []
@@ -188,7 +265,11 @@ for x, y in enumerate(fitVal):
     aduSum.append(np.sum(skysubtractedFlux[:,x]))
 wavelength = np.array(wavelength)
 aduSum = np.array(aduSum)
-plt.plot(wavelength,aduSum)
+ax.plot(wavelength,aduSum)
+
+
+#작은 x에 대해 값이 작아진다. 왜지? preprocessing 문제?
+
 
 
 #M = fits.open("./Spectroscopy_Example/20181023/reduced/r_moon_0.1_1.fit")
