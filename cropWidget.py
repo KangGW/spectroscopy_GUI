@@ -22,14 +22,15 @@ from fitInfo import flags, cropInfo, currentFileInfo
 class cropWidget(QWidget):
     cropDoneSignal = pyqtSignal(cropInfo)
 
-    def __init__(self):
+    def __init__(self, currentFileLocation = ''):
         super().__init__()
-        self.initUI()
+        self.filename = currentFileLocation
         self.cropInfo = cropInfo()
         self.isPressed = False
+        self.cropCheckWidget = cropCheckWidget(self.cropInfo)
+        self.initUI()
 
     def initUI(self):
-
         self.hbox = QHBoxLayout()
 
         self.fig = plt.Figure()
@@ -43,11 +44,15 @@ class cropWidget(QWidget):
         self.hbox.addWidget(self.canvas)
         self.setLayout(self.hbox)
 
-    @pyqtSlot(str)
-    def onCropStarted(self, currenFileLocation):
-        self.filename = currenFileLocation
-        data = fits.open(Path(self.filename))[0].data
-        zimshow(self.ax, data)
+        if (self.filename !=''):
+            self.data = fits.open(Path(self.filename))[0].data
+            zimshow(self.ax, self.data)
+        self.canvas.draw()
+
+    def setFileName(self, fileName):
+        self.filename = fileName
+        self.data = fits.open(Path(self.filename))[0].data
+        zimshow(self.ax, self.data)
         self.canvas.draw()
 
     def on_press(self, event):
@@ -98,17 +103,19 @@ class cropWidget(QWidget):
         self.rect.remove()
         self.ax.figure.canvas.draw()
         self.isPressed = False
-
+        self.cropCheckWidget.setCropInfo(self.cropInfo)
+        self.cropCheckWidget.show()
+        self.cropCheckWidget.raise_()
 
 
 # cropwidget에서 선택된 영역을 crop 할지 물어보고 cropaction을 실행하는 widget
 class cropCheckWidget(QWidget):
     imageCropSignal = pyqtSignal(cropInfo)
 
-    def __init__(self):
+    def __init__(self, cropInformation):
         super().__init__()
+        self.cropInfo = cropInformation
         self.initUI()
-        self.cropInfo = cropInfo()
 
     def initUI(self):
         self.gridLayout = QGridLayout()
@@ -124,19 +131,19 @@ class cropCheckWidget(QWidget):
         self.gridLayout.addWidget(self.noBtn, 1, 1)
         self.yesBtn.clicked.connect(self.onYes)
         self.noBtn.clicked.connect(self.onNo)
-
-    @pyqtSlot(cropInfo)
-    def onCropDone(self, fileinfo):
-        self.show()
-        self.raise_()
-        self.cropInfo = fileinfo
-
-        data = fits.open(Path(self.cropInfo.filename))[0].data[self.cropInfo.y0:self.cropInfo.y1,
+        if self.cropInfo.filename == '' : return
+        else:
+            self.data = fits.open(Path(self.cropInfo.filename))[0].data[self.cropInfo.y0:self.cropInfo.y1,
                self.cropInfo.x0:self.cropInfo.x1]
+            zimshow(self.ax, self.data)
+            self.canvas.draw()
 
-        zimshow(self.ax, data)
+    def setCropInfo(self, cropInfo):
+        self.cropInfo = cropInfo
+        self.data = fits.open(Path(self.cropInfo.filename))[0].data[self.cropInfo.y0:self.cropInfo.y1,
+               self.cropInfo.x0:self.cropInfo.x1]
+        zimshow(self.ax, self.data)
         self.canvas.draw()
-
     def onNo(self):
         self.close()
 
@@ -144,4 +151,11 @@ class cropCheckWidget(QWidget):
         self.imageCropSignal.emit(self.cropInfo)
         self.close()
 
+
+
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+    ex = cropWidget("./Spectroscopy_Example/20181023/Lan93101-0004sp.fit")
+    ex.show()
+    sys.exit(app.exec_())
 
