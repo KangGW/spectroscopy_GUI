@@ -20,7 +20,7 @@ from astropy.modeling.fitting import LevMarLSQFitter
 from astropy.stats import sigma_clip, gaussian_fwhm_to_sigma
 from astropy.modeling.models import Gaussian1D, Chebyshev2D
 from mpl_toolkits.mplot3d import Axes3D
-
+import math
 from scipy import stats
 
 
@@ -28,7 +28,7 @@ from scipy import stats
 
 
 
-#Todo 패턴매칭 알고리즘을 사용해 자동으로 비슷한 이미지구간을 찾아주는 기능도 구현해보자
+#Todo cross correlation을 사용해 (FFT를 그려서)같은부분을 자동으로 찾아주는 알고리즘을 넣어보자.
 #vs
 #Todo https://github.com/jveitchmichaelis/rascal/blob/master/rascal/calibrator.py hough transform
 # 허프 트렌스폼은 직선을 찾는 알고리즘인데 상대적으로 많은 Wavelength emission값이랑 상대적으로 적은
@@ -38,7 +38,26 @@ from scipy import stats
 #Todo 다른 피팅방식(체비세프라던가)을 적용해 보자.
 
 
+def fittedWavelength(x, y, regFactor, fitMethod):
+    if fitMethod == 'linear':
+        if type(y) is not (list or np.ndarray) : y = [y]
 
+        wavelength = []
+        for yVal in y:
+            yHigh = math.ceil(yVal)
+            yLow = math.floor(yVal)
+            yDiff = yVal - yLow
+            slopeHigh = regFactor['Slope'][yHigh]
+            interceptHigh = regFactor['Intercept'][yHigh]
+            slopeLow = regFactor['Slope'][yLow]
+            interceptLow = regFactor['Intercept'][yLow]
+            wavelengthValHigh = x * slopeHigh + interceptHigh
+            wavelengthValLow = x * slopeLow + interceptLow
+            wavelength.append((wavelengthValHigh - wavelengthValLow)*yDiff + wavelengthValLow)
+        wavelength = np.array(wavelength)
+
+    if len(wavelength==1):wavelength = wavelength[0]
+    return wavelength
 
 
 
@@ -48,7 +67,7 @@ class reIdentifier(QWidget):
     def __init__(self, matchList: pd.DataFrame, flux: np.array, fitMethod='linear', FWHM=2):
         super().__init__()
         self.matchList = matchList
-        self.fitter = fitMethod
+        self.fitMethod = fitMethod
         self.flux = flux
         self.yStep = 1
         self.regFactor = None
@@ -61,20 +80,12 @@ class reIdentifier(QWidget):
         need to impliment another way of fiting. 
         '''
 
-    def fittedWavelength(self, x, y):
-        regFactor = self.regFactor
-        if self.fitter == 'linear':
-            slope = regFactor['Slope'][y]
-            intercept = regFactor['Intercept'][y]
-            wavelength = x * slope + intercept
-        return wavelength
-
     def doFit(self, fitMethod=None, yStep=None):
         if fitMethod is not None:
-            self.fitter = fitMethod
+            self.fitMethod = fitMethod
         if yStep is not None:
             self.yStep = yStep
-        if self.fitter == 'linear':
+        if self.fitMethod == 'linear':
             matchList = self.matchList
             matchList = matchList[matchList.Pixel != 0]
             ystep = self.yStep
@@ -189,8 +200,8 @@ class reIdentifier(QWidget):
             self.yLine = imgAx.axhline(yCut, color='black')
             for x in fittingPoints.loc[fittingPoints.YPixel == yCut].XPixel:
                 yResidualAx.plot(x, fittingPoints.loc[np.logical_and(fittingPoints.YPixel == yCut,
-                                                                     fittingPoints.XPixel == x)].Wavelength - self.fittedWavelength(
-                    x, yCut), 'rx', ms=5)
+                                                                     fittingPoints.XPixel == x)].Wavelength - fittedWavelength(
+                    x, yCut, self.regFactor, self.fitMethod), 'rx', ms=5)
             yResidualAx.axhline(0, color='blue')
 
     def setMatchList(self, matchList: pd.DataFrame):
