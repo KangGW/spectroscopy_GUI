@@ -26,7 +26,7 @@ from scipy.optimize import curve_fit
 from scipy import signal
 from fitInfo import cropInfo
 from cropWidget import cropWidget
-
+from matplotlib.figure import Figure
 
 import math
 #Todo 읽어볼것
@@ -38,105 +38,7 @@ import math
 #preprocessed image file
 #FWHM
 
-def gaussian(x, amplitude, mean, stddev ):
-    return (amplitude *stddev*np.sqrt(2*np.pi) / np.exp(0))* 1/ (stddev * np.sqrt(2*np.pi )) * np.exp( - (x-mean)**2 / (2*stddev**2) )
 
-def linearSky(x, slope, intercept):
-    return x*slope + intercept
-
-def skyImage(x, slope, intercept, amplitude, mean, stddev):
-    return linearSky(x, slope, intercept) + gaussian(x, amplitude, mean, stddev)
-
-
-
-#우선 이미지를 받아와서 다시 크롭한다
-
-#Todo need to implement method that reject some point
-class apertureTraceWidget(QMainWindow):
-    def __init__(self, fileName):
-        super().__init__()
-        self.FWHM = 2 #Todo add method for getting FHWM, gain, readoutnoise from image hdr
-        self.fileName = fileName
-        self.flux = fits.open(fileName)[0].data
-        self.skyFit = linearSky
-        self.objFit = gaussian
-        self.isCropped = False
-        self.cropInfo = cropInfo()
-        self.initUI()
-
-    def initUI(self):
-        self.layout = QGridLayout()
-        self.mainWidget = QWidget()
-        self.mainWidget.setLayout(self.layout)
-        self.setCentralWidget(self.mainWidget)
-
-        self.imageFigure = plt.figure()
-        self.imageCanvas = FigureCanvas(self.imageFigure) # contains first image and add points from aperturetrace
-        self.mainImageAx = self.imageFigure.add_subplot(311)
-
-        self.fittingFigure = plt.figure()
-        self.fittingCanvas = FigureCanvas(self.fittingFigure) # contains fitting images
-
-        self.cropBtn = QPushButton('&Crop')
-        self.cropWidget = cropWidget(self.fileName)
-        self.cropBtn.clicked.connect(self.onCrop)
-        self.cropWidget.cropCheckWidget.imageCropSignal.connect(self.imageCrop)
-        self.layout.addWidget(self.imageCanvas, 0,0)
-        self.layout.addWidget(self.cropBtn, 1,0)
-        self.showImage()
-
-    def onCrop(self):
-        self.cropWidget.show()
-        self.cropWidget.raise_()
-
-    @pyqtSlot(cropInfo)
-    def imageCrop(self, crop):
-        self.cropWidget.close()
-        self.cropInfo = crop
-        self.isCropped = True
-        print(crop)
-        self.showImage()
-
-    def showImage(self):
-        if self.isCropped:
-            data = self.flux[self.cropInfo.y0:self.cropInfo.y1,
-               self.cropInfo.x0:self.cropInfo.x1]
-        else:
-            data = self.flux
-
-        zimshow(self.mainImageAx, data)
-        self.mainImageAx.figure.canvas.draw()
-
-
-
-
-
-if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    ex = apertureTraceWidget("./Spectroscopy_Example/20181023/reduced/r_HD18247_60.0_1.fit")
-    ex.show()
-    sys.exit(app.exec_())
-
-
-
-
-
-
-
-
-C = fits.open("./Spectroscopy_Example/20181023/reduced/r_HD18247_60.0_1.fit")
-# Find
-flux = C[0].data[40:110,300:800]
-
-
-#Todo fitting 관련된거 다 scipy optimize curvefit으로 바꾸자
-
-
-
-C = fits.open("./Spectroscopy_Example/20181023/reduced/r_HD216604_60.0_9.fit")
-
-skyFit = linearSky
-flux = flux = C[0].data[40:110,300:800]
 
 # 결과적으로 피팅이 완료된 상태의 이미지만 넣는다.
 
@@ -167,11 +69,23 @@ flux = flux = C[0].data[40:110,300:800]
 #X Column and fitting 정보, 클릭해서 볼 수 있게/ 선택되거나 선택되지 않은 aperture들을 표시.
 
 
-#%%
 
 
-class apertureTracer():
+def gaussian(x, amplitude, mean, stddev ):
+    return (amplitude *stddev*np.sqrt(2*np.pi) / np.exp(0))* 1/ (stddev * np.sqrt(2*np.pi )) * np.exp( - (x-mean)**2 / (2*stddev**2) )
+
+def linearSky(x, slope, intercept):
+    return x*slope + intercept
+
+def skyImage(x, slope, intercept, amplitude, mean, stddev):
+    return linearSky(x, slope, intercept) + gaussian(x, amplitude, mean, stddev)
+
+
+class apertureTracer(QWidget):
+    progressChangeSignal = pyqtSignal(float)
+
     def __init__(self, flux, skyFit, objFit, fig=None, waveFig = None):
+        super().__init__()
         self.flux = flux
         self.skyFit = skyFit
         self.objFit = objFit
@@ -179,6 +93,7 @@ class apertureTracer():
         self.cutExist = False
         self.norm = znorm(flux)
         self.apertureFitMethod = 'chebyshev'
+        self.pickDistance = 3
         print(self.norm)
         if fig is None: self.fig = plt.figure(figsize = (12,5))
         else: self.fig = fig
@@ -227,7 +142,12 @@ class apertureTracer():
             # find initial guess for linear sky
             # extract gaussian and linear fit
             # peakPix 주변 FWHM 2배 만큼의 픽셀을 뺀 후에 linearfit
-            yObj = np.arange(peakPixGuess - FWHM * 2, peakPixGuess + FWHM * 2)
+
+
+            objMin = peakPixGuess - FWHM * 2 if peakPixGuess - FWHM * 2>0 else 0
+            objMax = peakPixGuess + FWHM * 2 if peakPixGuess + FWHM * 2<len(fluxNow) else len(fluxNow)
+
+            yObj = np.arange(objMin, objMax)
             ySky = np.delete(yFlux, yObj)
             fluxSky = np.delete(fluxNow, yObj)
             #guessAx.plot(yFlux, fluxNow, 'r-')
@@ -250,9 +170,10 @@ class apertureTracer():
 
             try:
                 poptGauss, pcov = curve_fit(gaussian, yFlux, gaussGuessFlux,
-                                            [gaussGuessFlux[peakPixGuess], peakPixGuess, FWHM * gaussian_fwhm_to_sigma])
+                                            [gaussGuessFlux[peakPixGuess], peakPixGuess, FWHM * gaussian_fwhm_to_sigma],
+                                            bounds = ((0, peakPixGuess- FWHM,0),(gaussGuessFlux[peakPixGuess]*2,peakPixGuess+ FWHM ,FWHM)))
             except:
-                poptGauss = [0, 0, 0]
+                poptGauss = np.array([0, peakPixGuess, FWHM * gaussian_fwhm_to_sigma])
 
             #guessAx.plot(xyFlux, gaussian(xyFlux, *poptGauss), 'y--')
             #guessAx.plot(xyFlux, skyImage(xyFlux, *poptSky, *poptGauss), 'b--')
@@ -266,9 +187,12 @@ class apertureTracer():
             #stddevGuess = FWHM * gaussian_fwhm_to_sigma
             try:
                 poptFin, pcov = curve_fit(skyImage, yFlux, fluxNow,
-                                          [slopeGuess, interceptGuess, amplitudeGuess, meanGuess, stddevGuess])
+                                          [slopeGuess, interceptGuess, amplitudeGuess, meanGuess, stddevGuess],
+                                          bounds = ((-np.inf, -np.inf, 0, peakPixGuess-FWHM, 0.001), (np.inf, np.inf, 2 * gaussGuessFlux[peakPixGuess], peakPixGuess+ FWHM, FWHM)))
+
             except:
-                poptFin = [0, 0, 0, 0, 0]
+                poptSky, pcov = curve_fit(skyFit, yFlux, fluxNow, [slopeGuess, interceptGuess])
+                poptFin = np.array([poptSky[0], poptSky[1], 0, peakPixGuess, FWHM * gaussian_fwhm_to_sigma])
 
             #fitAx.plot(yFlux, fluxNow, 'r-')
             #fitAx.plot(xyFlux, skyImage(xyFlux, *poptFin), 'b--')
@@ -284,6 +208,8 @@ class apertureTracer():
             apertures.append(poptFin[3])
             skysubtractedFlux.append(skysubtractedFluxNow)
             skyFlux.append(skyFluxNow)
+            self.progressChangeSignal.emit(xPix/len(flux[0])*100)
+        self.progressChangeSignal.emit(100)
 
 
         skysubtractedFlux = np.array(skysubtractedFlux)
@@ -295,6 +221,10 @@ class apertureTracer():
         zimshow(self.subImgAx, self.skysubtractedFlux, normalize=self.norm)
         zimshow(self.skyImgAx, self.skyFlux, normalize=self.norm)
 
+        self.imgAx.set_xlim(0,len(flux[0]))
+        self.imgAx.set_ylim(0,len(flux))
+        self.apertureAx.set_xlim(0,len(flux[0]))
+        self.apertureAx.set_ylim(0, len(flux))
 
     def apertureFittingCut(self, xCut):
         apertureAx = self.apertureAx
@@ -310,19 +240,22 @@ class apertureTracer():
         xyFlux = np.arange(0, len(flux), 0.01)
         fluxNow = flux[:, xCut]
         popts = self.apertureCoeffs[xCut]
+
         if self.cutExist == True :  self.xCutter.remove()
 
         self.fitAx.clear()
+        self.residualAx.clear()
+        self.xCutter = apertureAx.axvline(xCut, color='r', picker=True, pickradius = self.pickDistance)
 
-        self.xCutter = apertureAx.axvline(xCut, color='k')
 
-        self.fitAx.plot(yFlux, fluxNow, 'k-')
+
+        self.fitAx.plot(yFlux, fluxNow, 'r-')
         self.fitAx.plot(xyFlux, skyImage(xyFlux, *popts), 'b--')
         self.fitAx.plot(xyFlux, skyFit(xyFlux, *popts[:2]), 'y--')
         self.fitAx.plot(xyFlux, objFit(xyFlux, *popts[2:]), 'y--')
 
         self.residualAx.plot(yFlux, fluxNow-skyImage(yFlux, *popts), 'b--')
-        self.residualAx.axhline(0, color='r', linestyle='--')
+        self.residualAx.axhline(0, color='r', linestyle='-')
 
         # fitAx.plot(yFlux, fluxNow, 'r-')
         # fitAx.plot(xyFlux, skyImage(xyFlux, *poptFin), 'b--')
@@ -434,8 +367,174 @@ class apertureTracer():
 
         return spec
 
+#우선 이미지를 받아와서 다시 크롭한다
+
+#Todo need to implement method that reject some point
 
 
+class apertureTraceWidget(QMainWindow):
+    def __init__(self, fileName):
+        super().__init__()
+        self.FWHM = 2 #Todo add method for getting FHWM, gain, readoutnoise from image hdr
+        self.fileName = fileName
+        self.flux = fits.open(fileName)[0].data
+        self.skyFit = linearSky
+        self.objFit = gaussian
+        self.apertureTracerOpen = False
+        self.isXcutterPicked = False
+        self.cropInfo = cropInfo(y0=0,y1=len(self.flux),x0=0,x1=len(self.flux[0]),filename=self.fileName)
+        self.norm = znorm(self.flux)
+        self.initUI()
+
+
+
+    def initUI(self):
+        self.layout = QGridLayout()
+        self.mainWidget = QWidget()
+        self.mainWidget.setLayout(self.layout)
+        self.setCentralWidget(self.mainWidget)
+
+
+        self.imageCanvas = FigureCanvas(Figure()) # contains first image and add points from aperturetrace
+        self.mainImageAx = self.imageCanvas.figure.add_subplot(111)
+
+
+        self.fittingCanvas = FigureCanvas(Figure()) # contains fitting images
+
+        self.waveCanvas = FigureCanvas(Figure())  # contains fitting images
+
+
+
+        self.cropBtn = QPushButton('&Crop')
+        self.cropWidget = cropWidget(self.fileName)
+        self.cropBtn.clicked.connect(self.onCrop)
+        self.cropWidget.cropCheckWidget.imageCropSignal.connect(self.imageCrop)
+
+        self.apertureTracerBtn = QPushButton('&ApertureTracer')
+        self.apertureTracerBtn.clicked.connect(self.onApertureTracer)
+
+        self.aperturePointBtn = QPushButton('&AperturePoints')
+        self.aperturePointBtn.clicked.connect(self.onFindAperturePoints)
+
+        self.apertureTraceBtn = QPushButton('&ApertureTrace')
+        self.apertureTraceBtn.clicked.connect(self.onApertureTrace)
+
+        self.progressBar = QProgressBar(self)
+
+
+
+        self.layout.addWidget(self.imageCanvas, 0,0, 1, -1)
+        self.layout.addWidget(self.cropBtn, 1,0, 1, -1)
+        self.layout.addWidget(self.fittingCanvas, 2,0, 1, -1)
+        self.layout.addWidget(self.apertureTracerBtn, 3,0)
+        self.layout.addWidget(self.aperturePointBtn, 3,1)
+        self.layout.addWidget(self.apertureTraceBtn, 3,2)
+
+        self.layout.addWidget(self.progressBar,4,0,1,-1)
+
+        self.showImage()
+
+
+        self.fittingCanvas.mpl_connect("pick_event", self.onPickAtfittingCanvas)
+        self.fittingCanvas.mpl_connect("motion_notify_event", self.onMoveAtfittingCanvas)
+        self.fittingCanvas.mpl_connect("button_release_event", self.onReleaseAtfittingCanvas)
+
+
+    def onCrop(self):
+        self.cropWidget.show()
+        self.cropWidget.raise_()
+
+    @pyqtSlot(cropInfo)
+    def imageCrop(self, crop):
+        self.cropWidget.close()
+        self.cropInfo = crop
+        self.showImage()
+
+    def showImage(self):
+        data = self.flux[self.cropInfo.y0:self.cropInfo.y1,
+               self.cropInfo.x0:self.cropInfo.x1]
+        zimshow(self.mainImageAx, data, normalize=self.norm)
+        self.mainImageAx.figure.canvas.draw()
+
+
+    def onApertureTracer(self):
+        self.apertureTracerOpen = True
+        self.data  = self.flux[self.cropInfo.y0:self.cropInfo.y1,
+               self.cropInfo.x0:self.cropInfo.x1]
+        self.apertureTracer = apertureTracer(self.data, self.skyFit, self.objFit, fig=self.fittingCanvas.figure, waveFig = self.waveCanvas.figure)
+        self.apertureTracer.progressChangeSignal.connect(self.onProgressChanged)
+
+        self.fittingCanvas.draw()
+
+
+    def onFindAperturePoints(self):
+        if not self.apertureTracerOpen : return
+        self.apertureTracer.findAperturePoints()
+        self.apertureTracer.apertureFittingCut(int(len(self.data[0])/2))
+        self.fittingCanvas.draw()
+
+    def onApertureTrace(self):
+        if not self.apertureTracerOpen: return
+        self.apertureTracer.apertureTrace()
+        self.fittingCanvas.draw()
+
+    def onPickAtfittingCanvas(self, event):
+        if self.isXcutterPicked: return
+        if event.artist == self.apertureTracer.xCutter:
+            self.isXcutterPicked = True
+
+    def onMoveAtfittingCanvas(self, event):
+        if not event.inaxes: return
+        if event.inaxes != self.apertureTracer.apertureAx: return
+        if self.isXcutterPicked:
+            self.apertureTracer.xCutter.remove()
+            self.apertureTracer.xCutter = self.apertureTracer.apertureAx.axvline(int(event.xdata), color='red', picker=True, pickradius=self.apertureTracer.pickDistance)
+            self.apertureTracer.apertureFittingCut(int(event.xdata))
+        self.fittingCanvas.draw()
+
+    def onReleaseAtfittingCanvas(self, event):
+        if not event.inaxes: return
+        if event.inaxes != self.apertureTracer.apertureAx: return
+        if not self.isXcutterPicked: return
+        self.isXcutterPicked = False
+
+    def onApertureExtract(self):
+        self.apertureTracer.apertureExtract()
+
+    @pyqtSlot(float)
+    def onProgressChanged(self, val):
+        self.progressBar.setValue(int(val))
+
+
+if __name__ == '__main__':
+    app = QApplication(sys.argv)
+
+    B = fits.open("./Spectroscopy_Example/20181023/combine/comp_15_15.0.fit")
+    matchList = pd.DataFrame(dict(Pixel=[403, 374, 362, 265,
+                                         245, 238, 223, 213,
+                                         178, 169, 144, 131, 53],
+                                  Wavelength=[8780.6, 8495.4, 8377.6, 7438.9,
+                                              7245.2, 7173.9, 7032.4, 6929.5,
+                                              6599.0, 6507.0, 6266.5, 6143.1, 5400.6]))
+    flux = B[0].data
+    reId = reIdentifier(matchList, flux)
+    reId.doFit()
+    regFactor = reId.regFactor
+    identificationMethod = 'linear'
+    FWHM = 4
+
+    ex = apertureTraceWidget("./Spectroscopy_Example/20181023/reduced/r_HD18247_60.0_1.fit")
+    ex.show()
+    sys.exit(app.exec_())
+
+
+
+
+
+
+
+
+#%%
 B = fits.open("./Spectroscopy_Example/20181023/combine/comp_15_15.0.fit")
 matchList = pd.DataFrame(dict(Pixel=[403, 374, 362, 265,
                                      245, 238, 223, 213,
