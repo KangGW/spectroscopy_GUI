@@ -21,6 +21,17 @@ import os
 # Todo 이미지 선택기능(잘 안찍힌 사진들 없앨수 있게)넣기
 
 
+
+class preProcessor():
+    def __init__(self):
+        print()
+# Todo 이거 만들기!
+
+
+
+
+
+
 class preProcessorWidget(QWidget):
     preProcessingDoneSignal = pyqtSignal(currentFileInfo)
     def __init__(self, currentFileInfo):

@@ -22,9 +22,9 @@ import os
 
 
 def zimshow(ax, image, normalize=None, **kwargs):
-    print(normalize)
     if normalize is not None: return ax.imshow(image, norm=normalize, origin='lower')
     else: return ax.imshow(image, norm=znorm(image, **kwargs), origin='lower')
+
 def znorm(image, **kwargs):
     return ImageNormalize(image, interval=ZScaleInterval(), **kwargs)
 
@@ -156,6 +156,7 @@ class fitImageTableWidget(QSplitter):
 
     def fileOpen(self):
         filePath = str(QFileDialog.getExistingDirectory(self, "Select Directory"))
+        self.mainFolderLoc = filePath
         path = Path(filePath)
         fileList = list(path.glob("*.fit"))
 

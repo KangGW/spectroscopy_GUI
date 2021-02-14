@@ -20,6 +20,8 @@ from astropy.modeling.fitting import LevMarLSQFitter
 from astropy.stats import sigma_clip, gaussian_fwhm_to_sigma
 from astropy.modeling.models import Gaussian1D, Chebyshev2D
 from mpl_toolkits.mplot3d import Axes3D
+from matplotlib.figure import Figure
+from reIdentificationWidget import reIdentificationWidget
 
 from scipy import stats
 #우선 있는 파일 중에 Cali 파일만 열어서 first identification 하는 프로그램
@@ -73,6 +75,10 @@ class identificationWidget(QMainWindow):
         self.selfFWHM = 2
         self.REIDYStep = 2
         self.selfImageY = [0,0]
+        self.selfData = []
+        self.reidentificationWidget = reIdentificationWidget(matchList=self.wavelengthPixelList, flux=self.selfData,
+                                                             FWHM=self.selfFWHM)
+
         self.initUI()
 
     def initUI(self):
@@ -86,10 +92,9 @@ class identificationWidget(QMainWindow):
 
         #직접 찍은 아이덴티피케이션 이미지의 스펙트럼을 보여주는 fig
 
-        self.selfSpectrumFig = plt.Figure(figsize = (13,5))
-        self.selfSpectrumCanvas = FigureCanvas(self.selfSpectrumFig)
+        self.selfSpectrumCanvas = FigureCanvas(Figure(figsize = (13,5)))
 
-        self.selfSpectrumFig.clear()
+        self.selfSpectrumCanvas.figure.clear()
 
         self.peakNumberSlider = QSlider(Qt.Horizontal, self)
         self.peakNumberSlider.setValue(self.peakNumber)
@@ -122,12 +127,9 @@ class identificationWidget(QMainWindow):
 
 
 
-
-
         # 직접 찍은 아이덴티피케이션 이미지를 보여주는 fig
 
-        self.selfImageFig = plt.Figure(figsize = (5,2))
-        self.selfImageCanvas = FigureCanvas(self.selfImageFig)
+        self.selfImageCanvas = FigureCanvas(Figure(figsize = (5,2)))
 
         self.selfImageCanvas.mpl_connect("button_press_event", self.onPressAtImage)
         self.selfImageCanvas.mpl_connect("motion_notify_event", self.onMoveAtImage)
@@ -140,9 +142,7 @@ class identificationWidget(QMainWindow):
         self.selfSpectrumCanvas.mpl_connect("motion_notify_event", self.onMoveAtSelfSpectrum)
         self.selfSpectrumCanvas.mpl_connect("button_release_event", self.onReleaseAtSelfSpectrum)
 
-
-        self.selfSpectrumGaussFitFig = plt.Figure(figsize=(7, 7))
-        self.selfSpectrumGaussFitCanvas = FigureCanvas(self.selfSpectrumGaussFitFig)
+        self.selfSpectrumGaussFitCanvas = FigureCanvas(Figure(figsize=(7, 7)))
         self.gaussFitWidget = QWidget()
         self.gaussFitLayout = QVBoxLayout()
         self.gaussFitButton = QPushButton('&Yes')
@@ -176,8 +176,8 @@ class identificationWidget(QMainWindow):
 
 
         #비교할 아이덴티피케이션의 스펙트럼을 보여주는 fig
-        self.standardSpectrumFig = plt.Figure(figsize = (13,5))
-        self.standardSpectrumCanvas = FigureCanvas(self.standardSpectrumFig)
+
+        self.standardSpectrumCanvas = FigureCanvas(Figure(figsize = (13,5)))
 
         self.standardSpectrumCanvas.mpl_connect('scroll_event', self.onScrollAtStandardSpectrum)
         self.standardSpectrumCanvas.mpl_connect('pick_event', self.onPickPeakAtStandardSpectrum)
@@ -218,9 +218,9 @@ class identificationWidget(QMainWindow):
         self.setCentralWidget(self.mainWidget)
         menubar = self.menuBar()
         menubar.setNativeMenuBar(False)
+
         filemenu = menubar.addMenu('&File')#&는 File을 Alt F로 실행하게 해준다
         filemenu.addAction(self.calibrationFileOpenAction)
-
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.tables = QWidget()
@@ -240,14 +240,19 @@ class identificationWidget(QMainWindow):
 
         self.splitter.addWidget(self.spectrums)
 
+        self.reidentificationBtn = QPushButton('&Reidentification')
+        self.reidentificationBtn.clicked.connect(self.onReidentification)
+
         self.layout.addWidget(self.splitter, 1, 0, 3, 1)
         self.layout.addWidget(self.selfImageCanvas,1,1,1,1)
         self.layout.addWidget(self.selfPeakControl, 2, 1, 1, 1)
         self.layout.addWidget(self.standardSpectrumButton,3,1)
-
+        self.layout.addWidget(self.reidentificationBtn, 4, 0, 1,-1)
 
         self.mainWidget.setLayout(self.layout)
         self.setCentralWidget(self.mainWidget)
+        self.resize(1500, 800)
+        self.center()
 
     '''
     칼리브레이션 파일(comp 파일)을 열고 Identification에 사용될 Y방향(Wavelength에 수직한 방향) 구간을 결정하는 메소드    
@@ -255,8 +260,8 @@ class identificationWidget(QMainWindow):
     def onCalibnationFileOpen(self):
         filePath = QFileDialog.getOpenFileName(self, 'Open calibration file','./Spectroscopy_Example/20181023/combine/')[0]
         hdr, data = openFitData(filePath)
-        self.selfImageFig.clear()
-        self.selfImageAx = self.selfImageFig.add_subplot(111)
+        self.selfImageCanvas.figure.clear()
+        self.selfImageAx = self.selfImageCanvas.figure.add_subplot(111)
         zimshow(self.selfImageAx, data)
         self.selfImageCanvas.draw()
 
@@ -534,8 +539,8 @@ class identificationWidget(QMainWindow):
         MINAMP_PK = args[1]  # fraction of minimum amplitude (wrt maximum) to regard as peak
         NMAX_PK = args[2]
 
-        self.selfSpectrumFig.clear()
-        self.selfSpectrumAx = self.selfSpectrumFig.add_subplot(111)
+        self.selfSpectrumCanvas.figure.clear()
+        self.selfSpectrumAx = self.selfSpectrumCanvas.figure.add_subplot(111)
         identify = np.average(data[ymin:ymax, :], axis=0)
         ground = np.median(identify[0:200])
         max_intens = np.max(identify)
@@ -580,13 +585,13 @@ class identificationWidget(QMainWindow):
         iterations  = 3
 
         fitter = LevMarLSQFitter()
-        self.selfSpectrumGaussFitFig.clear()
+        self.selfSpectrumGaussFitCanvas.figure.clear()
         identify = identify - np.median(identify[0:100]) ##여기!
         for i in np.arange(iterations ):
             a = int(iterations / 5)
             if  iterations % 5 != 0 : a = a+1
 
-            ax = self.selfSpectrumGaussFitFig.add_subplot(a, 5, i+1)
+            ax = self.selfSpectrumGaussFitCanvas.figure.add_subplot(a, 5, i+1)
             peakPix = peakPixs[-i]
             xs = np.arange(peakPix - int(self.selfFWHM) * 5, peakPix + int(self.selfFWHM) * 5 + 1)
 
@@ -606,16 +611,12 @@ class identificationWidget(QMainWindow):
             ax.plot(xss, fitted(xss), 'r--')
             ax.figure.canvas.draw()
 
-    def spectrumGaussFit(self, identify, peakPixs):
-        #
-        return peak_gauss
-
 
     def selfSpectrumGaussFit(self, identify, peakPixs):
 
 
-        self.selfSpectrumFig.clear()
-        self.selfSpectrumAx = self.selfSpectrumFig.add_subplot(111)
+        self.selfSpectrumCanvas.figure.clear()
+        self.selfSpectrumAx = self.selfSpectrumCanvas.figure.add_subplot(111)
 
 
         fitter = LevMarLSQFitter()
@@ -735,8 +736,8 @@ class identificationWidget(QMainWindow):
     def standardSpectrumDraw(self, data, arc, peaks=[]):
         wavelength = data[0]
         flux = data[1]
-        self.standardSpectrumFig.clear()
-        self.standardSpectrumAx = self.standardSpectrumFig.add_subplot(111)
+        self.standardSpectrumCanvas.figure.clear()
+        self.standardSpectrumAx = self.standardSpectrumCanvas.figure.add_subplot(111)
         if (arc=='Neon'):
             peaks = [5330.8000, 5400.5620, 5764.4180, 5852.4878, 5944.8342, 6029.9971, 6074.3377, 6096.1630,  6143.0623,
                  6163.5939, 6217.2813, 6266.4950,  6304.7892,  6334.4279, 6382.9914,  6402.2460, 6506.5279,  6532.8824,
@@ -763,6 +764,13 @@ class identificationWidget(QMainWindow):
         self.onChangedList()
         self.standardSpectrumAx.figure.canvas.draw()
 
+
+    def onReidentification(self):
+        self.reidentificationWidget.setReidentifier(matchList = self.wavelengthPixelList, flux = self.selfData, fitMethod = 'linear', FWHM = self.selfFWHM)
+        self.reidentificationWidget.show()
+        self.reidentificationWidget.raise_()
+
+
     def onChangedList(self):
 
         self.wavelengthPixelModel = tableModel(self.wavelengthPixelList)
@@ -770,8 +778,16 @@ class identificationWidget(QMainWindow):
 
 
     def onButtonClicked(self, status):
-        print(self)
         self.bottonSinal.emit(status)
+
+    def center(self):
+        qr = self.frameGeometry()
+        cp = QDesktopWidget().availableGeometry().center()
+        qr.moveCenter(cp)
+        self.move(qr.topLeft())
+
+
+
 
 
 if __name__ == '__main__':
@@ -779,67 +795,3 @@ if __name__ == '__main__':
     ex = identificationWidget()
     ex.show()
     sys.exit(app.exec_())
-
-
-
-
-B = fits.open("./Spectroscopy_Example/20181023/combine/comp_15_15.0.fit")
-
-identify = np.average(B[0].data[50:70,:], axis=0)
-max_intens = np.max(identify)
-MINSEP_PK = 5   # minimum separation of peaks
-MINAMP_PK = 0.01 # fraction of minimum amplitude (wrt maximum) to regard as peak
-NMAX_PK = 50
-FWHM_ID = 4
-
-peak_pix = peak_local_max(identify, indices=True, num_peaks=NMAX_PK,
-                          min_distance=MINSEP_PK,
-                          threshold_abs=max_intens * MINAMP_PK)
-
-for i in peak_pix:
-    plt.axvline(i,0,100000, color = 'c')
-    plt.text(i,40000,str(i), rotation=70)
-plt.plot(identify, color = 'r')
-plt.xlim(400,800)
-plt.show()
-
-
-
-
-matchList = pd.DataFrame( dict(Pixel=[403, 374, 362, 265,
-                           245, 238, 223, 213,
-                           178, 169, 144, 131, 53],
-Wavelength=[8780.6, 8495.4, 8377.6, 7438.9,
-                           7245.2, 7173.9, 7032.4, 6929.5,
-                           6599.0, 6507.0, 6266.5, 6143.1, 5400.6]))
-flux = B[0].data
-data = flux
-ystep = 3
-reId = reIdentifier(matchList, flux)
-
-
-fitter = LevMarLSQFitter()
-
-x_identify = np.arange(len(identify))
-peak_gauss = []
-for peak_pix in ID_init['pixel_init']:
-    #TODO: put something like "lost_factor" to multiply to FWHM_ID in the bounds.
-    g_init = Gaussian1D(amplitude = identify[peak_pix],
-                       mean = peak_pix,
-                       stddev = FWHM_ID * gaussian_fwhm_to_sigma,
-                       bounds={'amplitude': (0, 2*identify_1[peak_pix]),
-                               'mean':(peak_pix-FWHM_ID, peak_pix+FWHM_ID),
-                               'stddev':(0, FWHM_ID)})
-    fitted = fitter(g_init, x_identify, identify)
-    peak_gauss.append(fitted.mean.value)
-
-res = stats.linregress(peak_gauss, ID_init['wavelength'])
-wavelength  = x_identify*res.slope + res.intersections
-
-for i in peak_gauss:
-    plt.axvline(i,0,100000, color = 'c')
-    plt.text(i,40000,str(i), rotation=70)
-plt.plot(identify, color = 'r')
-plt.xlim(400,800)
-plt.show()
-

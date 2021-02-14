@@ -7,6 +7,13 @@ Created on Tue Jan 19 21:44:52 2021
 @ used Algorithm and some code from ysbach's work
 https://github.com/ysBach/SNU_AOclass/blob/master/Notebooks/Spectroscopy_Example.ipynb
 
+지금 나와있는 파이프라인들
+aptrace 및 preprocessing
+https://aspired.readthedocs.io/en/latest/tutorials/quickstart.html
+identification
+https://rascal.readthedocs.io/en/latest/installation/installation.html
+에 비해 괜찮은가?
+
 """
 import copy
 import sys
@@ -27,7 +34,8 @@ from cropWidget import cropWidget, cropCheckWidget
 from fitImageTableWidget import fitImageTableWidget
 from preProcessorWidget import preProcessorWidget
 from fitInfo import cropInfo, currentFileInfo
-
+from identificationWidget import identificationWidget
+from apertureTraceWidget import apertureTraceWidget
 import os
 
 
@@ -60,7 +68,9 @@ import os
 #각각의 과정에서 얻어지는 결과물을 기본 패스 아래 다른 폴더에 넣어서 저장하고,
 #각각 파일이 없을 경우 에러를 띄워서 순서를 정하자
 
-#
+#Todo Widget과 Method를 구분해서 GUI 뿐만 아니라, terminal에서도 사용할 수 있게 + 유지보수가 쉽게 만들자.
+#Todo 한꺼번에 여러개 aptrace/apextract 가능하게 수정해 보자
+#Todo echelle spectrum 에도 적용 할수 있게 만들어 보자
 
 
 #GUI 디자인
@@ -71,36 +81,31 @@ import os
 # 파일 목록을 클릭하면 이미지를 메인창에 표시할 수 있도록 하자.
 # 스플리터로 만들어서 이리저리 움직일 수 있도록
 
-##스플리터 -> 드래그해서 크기조절 가능!!!!!!
-##스플리터는 여러개 설정 가능! 스플리터에 다른 스플리터를 addWidget으로
-##넣으면 된다
-
-
-##Todo Pycharm 문제인지 astropy 문제인지 모르겠는데 fits open에서 파일이 없으면 에러메세지 없이  튕긴다. 이거 에러창 띄우는 방식으로 해결하는 코드 넣어주면 좋을듯
 
 
 # main windows
 class MyApp(QMainWindow):
-    imageNameSignal = pyqtSignal(str)
-    
     def __init__(self):
-        super().__init__() #super는 부모클래스(여기선 QWidget)의 메소드를 불러와주기 위해서 사용
-        #fileTable에 사용할 panda 프레임 만들어놓기
+        super().__init__()
         data  = {'FILE-NAME':[' '], 'DATE-OBS':[' '], 'EXPTIME':[' '], 'IMAGETYPE':[' '], 'OBJECT':[' '], 'REMARKS':[' ']}
         self.nullFitFileList = pd.DataFrame(data)
         self.currentFileInfo = currentFileInfo(self.nullFitFileList)
+
+
+
         self.initUI()
         
         
         
     def initUI(self):
+
+        self.identificationWidget = identificationWidget()
+        self.identificationWidget.reidentificationWidget.identificationDoneSignal.connect(self.onIdentificationDone)
+
         self.cropWidget = cropWidget()
 
         self.fitImageTableWidget = fitImageTableWidget(self.currentFileInfo)
-        self.imageNameSignal.connect(self.cropWidget.onCropStarted)
-        self.cropCheckWidget = cropCheckWidget()        
-        self.cropWidget.cropDoneSignal.connect(self.cropCheckWidget.onCropDone)
-        self.cropCheckWidget.imageCropSignal.connect(self.imageCrop)
+        self.cropWidget.cropCheckWidget.imageCropSignal.connect(self.imageCrop)
 
         self.resize(1500,750)
         self.center()
@@ -162,24 +167,29 @@ class MyApp(QMainWindow):
         self.preProcessingAction.triggered.connect(self.onPreprocessing)
         self.preProcessingAction.setStatusTip('Preprocess images')
         
-        
-        
+
         
         
         #Identification
-        self.IdentificationAction = QAction('Identificatoin', self)
+        self.IdentificationAction = QAction('Identification', self)
         self.IdentificationAction.setShortcut('Ctrl+I')
-        self.IdentificationAction.triggered.connect(self.close)
+        self.IdentificationAction.triggered.connect(self.onIdentification)
         self.IdentificationAction.setStatusTip('match x axis of image and wavelength')
 
-        #ReIdentification
-        self.reIdentificationAction = QAction('Reidentificatoin', self)
-        self.reIdentificationAction.setShortcut('Ctrl+R')
-        self.reIdentificationAction.triggered.connect(self.close)
-        self.reIdentificationAction.setStatusTip('match x/y axis of image and wavelength')        
-                
         #Aperture Trace
-        
+        self.apertureTraceAction = QAction('apertureTrace', self)
+        self.apertureTraceAction.setShortcut('Ctrl+A')
+        self.apertureTraceAction.triggered.connect(self.onApertureTrace)
+        self.apertureTraceAction.setStatusTip('aperture Trace and Extract Spectrum from Image')
+
+        #standardization
+        #Todo Make it!
+        self.standardizationAction = QAction('standardization', self)
+        self.standardizationAction.setShortcut('Ctrl+s')
+        self.standardizationAction.triggered.connect(self.close)
+        self.standardizationAction.setStatusTip('aperture Trace and Extract Spectrum from Image')
+
+
         
         
         #001 Menubar를 통한 파일 오픈 및 정보 제공
@@ -187,22 +197,20 @@ class MyApp(QMainWindow):
         #이때 오픈된 파일에 대한 정보는 새 창으로 띄워주며 이 정보는 File_Information에서 다시 열어볼수 있게 하자.
         #완성!! 
         
-        #추가기능으로 Open 버튼을 통해 연 파일 목록중 사용할 것과 사용하지 않을 것을 분류할 수 있도록 하는 기능을 넣어보자
-        
-        
-        
-        #전처리부터 하자.
-        
-    
-        
 
         
+
         #002 이미지 크롭 및 전처리
         #Processing tap에 preprocessing 으로 실행
-        
+
+        #완성!!
         
         
         #이후에는 Processing tap에 각각의 과정에 해당하는 버튼(fid, reid, aptrace)을 통해 각 과정을 실행한다.
+        #아에 프리프로세싱이랑 spectrum export 부분은 따로 구분해서 다른 방식으로 프리프로세싱한 이미지를 사용해서 작업할 수 있도록 하자.
+
+
+
         #interactive gui를 만들 부분은 처음에 스펙트럼 자르는 부분(전처리과정)-> 이미지 크롭툴
         #first identification에서 패턴매칭하는거(가능하면 처음에 비슷한부분 자동으로 맞춰주기)
         
@@ -230,13 +238,19 @@ class MyApp(QMainWindow):
 #        filemenu.addAction(startAction)
         
         
-        
-        
-        filemenu = menubar.addMenu('&Processing')
-        filemenu.addAction(self.cropAction)
-        filemenu.addAction(self.preProcessingAction)
-        filemenu.addAction(self.IdentificationAction)
-        
+
+        processMenu = menubar.addMenu('&Processing')
+        processMenu.addAction(self.cropAction)
+        processMenu.addAction(self.preProcessingAction)
+
+        identificationMenu = menubar.addMenu('&Identification')
+        identificationMenu.addAction(self.IdentificationAction)
+
+        apertureTraceMenu = menubar.addMenu('&ApertureTrace')
+        apertureTraceMenu.addAction(self.apertureTraceAction)
+
+
+
         #ToolBar
         #self.toolbar = self.addToolBar('Exit')
         #self.toolbar.addAction(exitAction)
@@ -259,15 +273,14 @@ class MyApp(QMainWindow):
         self.statusBar().showMessage('processing')   
         
 
-    @pyqtSlot()
     def onCropAction(self):
+        self.cropWidget.setFileName(self.fitImageTableWidget.currentFileInfo.currentFileLocation)
         self.cropWidget.show()
         self.cropWidget.raise_()
-        self.imageNameSignal.emit(self.fitImageTableWidget.currentFileInfo.currentFileLocation)
+
     
     
-    
-    @pyqtSlot(cropInfo)     
+    @pyqtSlot(cropInfo)
     def imageCrop(self, crop):
         self.cropWidget.close()
         self.fitImageTableWidget.currentFileInfo.cropInfo = crop
@@ -285,6 +298,28 @@ class MyApp(QMainWindow):
         self.fitImageTableWidget.currentFileInfo = currentFileInfo
         self.preProcessorWidget.close()
         self.fitImageTableWidget.tableEdit()
+
+    def onIdentification(self):
+        self.identificationWidget.show()
+        self.identificationWidget.raise_()
+
+    @pyqtSlot(pd.DataFrame, str)
+    def onIdentificationDone(self, regFactor, identificationMethod):
+        self.identificationWidget.close()
+        self.regFactor = regFactor
+        self.identificationMethod = identificationMethod
+
+
+    def onApertureTrace(self):
+        SpectPath = self.fitImageTableWidget.mainFolderLoc  + '/spectrum'
+        Path.mkdir(Path(SpectPath), mode=0o777, exist_ok=True)
+        self.apertureTracerWidget = apertureTraceWidget(self.fitImageTableWidget.currentFileInfo.currentFileLocation, regFactor = self.regFactor, identificationMethod= self.identificationMethod, savePath = SpectPath)
+        self.apertureTracerWidget.show()
+        self.apertureTracerWidget.raise_()
+
+    def onApertureExtract(self):
+        print('')
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

@@ -23,6 +23,8 @@ from mpl_toolkits.mplot3d import Axes3D
 import math
 from scipy import stats
 
+from matplotlib.figure import Figure
+
 
 
 
@@ -133,10 +135,12 @@ class reIdentifier(QWidget):
                     wave = xPixel * res.slope + res.intercept
                     wave = np.round(wave, 4)
                     wavelength.append(wave)
+
         self.progressChangeSignal.emit(100)
         self.fittingPoints = fittingPoints
         self.regFactor = regFactor
         self.wavelength = np.array(wavelength)
+
         '''
         xPixel, YPixel, wavelength를 X,Y,Z 축으로 가지는 3축 좌표평면에 실제 fitting 이 일어난 각 ypixel과  gauss
         fitting을 통해 직접 fitting에 사용된 xpixel을 x,y 값으로, matchList['Wavelength'] 를 z값으로 사용해 
@@ -200,7 +204,7 @@ class reIdentifier(QWidget):
             self.yLine = imgAx.axhline(yCut, color='black')
             for x in fittingPoints.loc[fittingPoints.YPixel == yCut].XPixel:
                 yResidualAx.plot(x, fittingPoints.loc[np.logical_and(fittingPoints.YPixel == yCut,
-                                                                     fittingPoints.XPixel == x)].Wavelength - fittedWavelength(
+                                                                     fittingPoints.XPixel == x)].Wavelength.iloc[0] - fittedWavelength(
                     x, yCut, self.regFactor, self.fitMethod), 'rx', ms=5)
             yResidualAx.axhline(0, color='blue')
 
@@ -209,15 +213,20 @@ class reIdentifier(QWidget):
     def setFlux(self, flux: np.ndarray):
         self.flux = flux
 
+    def setAll(self, matchList, flux, fitMethod, FWHM):
+        self.matchList = matchList
+        self.flux = flux
+        self.fitMethod = fitMethod
+        self.FWHM = FWHM
+
+
 class reIdentificationWidget(QWidget):
+    identificationDoneSignal = pyqtSignal(pd.DataFrame, str)
     def __init__(self, matchList: pd.DataFrame, flux: np.ndarray, fitMethod='linear', FWHM=2):
         super().__init__()
         self.flux = flux
         self.reIdentifier = reIdentifier(matchList=matchList, flux=flux, fitMethod=fitMethod, FWHM=FWHM)
         self.reIdentifier.progressChangeSignal.connect(self.onProgressChanged)
-        self.x = len(self.flux[0])
-        self.y = len(self.flux)
-        self.cuts = int(self.x/2) ,int(self.y/2)
         self.initUI()
 
 
@@ -229,8 +238,8 @@ class reIdentificationWidget(QWidget):
     def initUI(self):
         self.layout = QGridLayout()
         # result Figures
-        self.resultFig = plt.Figure(figsize=(10, 6))
-        self.resultCanvas = FigureCanvas(self.resultFig)
+
+        self.resultCanvas = FigureCanvas(Figure(figsize=(10, 6)))
 
         # Loding bar and fitting button
         self.loadingBar = QProgressBar(self)
@@ -250,17 +259,15 @@ class reIdentificationWidget(QWidget):
 
         #x, y cut sliders
         self.xCutSlider = QSlider(Qt.Vertical, self)
-        self.xCutSlider.setValue(self.cuts[0])
-        self.xCutSlider.setRange(0, self.x-1)
-        self.xCutSliderLabel = QLabel(f'Xcut : {self.cuts[0]}')
+        self.xCutSliderLabel = QLabel(f'Xcut : ')
         self.xCutSlider.valueChanged.connect(self.onXCutChanged)
 
         self.yCutSlider = QSlider(Qt.Vertical, self)
-        self.yCutSlider.setValue(self.cuts[1])
-        self.yCutSlider.setRange(0, self.y-1)
-        self.yCutSliderLabel = QLabel(f'Ycut : {self.cuts[1]}')
+        self.yCutSliderLabel = QLabel(f'Ycut : ')
         self.yCutSlider.valueChanged.connect(self.onYCutChanged)
 
+        self.finishBtn = QPushButton('&Finish Reidentification')
+        self.finishBtn.clicked.connect(self.onFinish)
 
         self.layout.addWidget(self.plot2dBtn, 0, 0)
 #        self.layout.addWidget(self.plot3dBtn, 0, 1)
@@ -274,6 +281,7 @@ class reIdentificationWidget(QWidget):
         self.layout.addWidget(self.yStepSliderLabel, 2, 1)
         self.layout.addWidget(self.linearButton, 3, 0)
         self.layout.addWidget(self.loadingBar, 4, 0, 1, -1)
+        self.layout.addWidget(self.finishBtn, 5, 0, 1, -1)
         self.setLayout(self.layout)
 
 
@@ -291,19 +299,48 @@ class reIdentificationWidget(QWidget):
         self.loadingBar.setValue(val)
 
     def on2DPlot(self):
-        self.reIdentifier.fitPlot2D( fig=self.resultFig, Cuts = self.cuts)
-        self.resultFig.canvas.draw()
+        self.setSlider()
+        self.reIdentifier.fitPlot2D( fig=self.resultCanvas.figure, Cuts = self.cuts)
+        self.resultCanvas.figure.canvas.draw()
+
     def onXCutChanged(self, val):
         self.cuts = (val, self.cuts[1])
         self.xCutSliderLabel.setText(f'Xcut : {val}')
-        self.reIdentifier.fitPlot2D( fig=self.resultFig, Cuts = self.cuts)
-        self.resultFig.canvas.draw()
+        self.reIdentifier.fitPlot2D( fig=self.resultCanvas.figure, Cuts = self.cuts)
+        self.resultCanvas.figure.canvas.draw()
+
     def onYCutChanged(self, val):
         val = self.y - val
+        if (val%self.reIdentifier.yStep !=0): return
         self.cuts = (self.cuts[0], val)
         self.yCutSliderLabel.setText(f'Ycut : {val}')
-        self.reIdentifier.fitPlot2D( fig=self.resultFig, Cuts = self.cuts)
-        self.resultFig.canvas.draw()
+        self.reIdentifier.fitPlot2D( fig=self.resultCanvas.figure, Cuts = self.cuts)
+        self.resultCanvas.figure.canvas.draw()
+
+    def onFinish(self):
+        reply = QMessageBox.question(self, 'Message', 'Use this as Identification?',
+                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+
+        if reply == QMessageBox.Yes:
+            self.identificationDoneSignal.emit(self.reIdentifier.regFactor, self.reIdentifier.fitMethod)
+            self.close()
+
+    def setReidentifier(self, matchList, flux, fitMethod, FWHM):
+        self.flux = flux
+        self.reIdentifier.setAll(matchList=matchList, flux=flux, fitMethod=fitMethod, FWHM=FWHM)
+
+    def setSlider(self):
+        self.x = len(self.flux[0])
+        self.y = len(self.flux)
+        self.cuts = int(self.x/2) ,int(self.y/2)
+        self.xCutSlider.setValue(self.cuts[0])
+        self.xCutSlider.setRange(0, self.x-1)
+        self.yCutSlider.setValue(self.cuts[1])
+        self.yCutSlider.setRange(0, self.y-1)
+
+
+
+
 if __name__ == '__main__':
     app = QApplication(sys.argv)
 

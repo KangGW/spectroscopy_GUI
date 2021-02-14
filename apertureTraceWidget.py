@@ -20,7 +20,7 @@ from astropy.modeling.fitting import LevMarLSQFitter
 from astropy.stats import sigma_clip, gaussian_fwhm_to_sigma
 from astropy.modeling.models import Gaussian1D, Chebyshev2D
 from mpl_toolkits.mplot3d import Axes3D
-from reIdentificatoinWidget import reIdentifier, fittedWavelength
+from reIdentificationWidget import reIdentifier, fittedWavelength
 from scipy import stats
 from scipy.optimize import curve_fit
 from scipy import signal
@@ -86,6 +86,7 @@ class apertureTracer(QWidget):
 
     def __init__(self, flux, skyFit, objFit, fig=None, waveFig = None):
         super().__init__()
+
         self.flux = flux
         self.skyFit = skyFit
         self.objFit = objFit
@@ -99,8 +100,6 @@ class apertureTracer(QWidget):
         else: self.fig = fig
         if waveFig is None: self.waveFig = plt.figure()
         else: self.waveFig = waveFig
-
-
 
     def findAperturePoints(self):
         flux = self.flux
@@ -347,7 +346,7 @@ class apertureTracer(QWidget):
             aduSum = []
             for x, y in enumerate(fitVal):
                 wavelength.append(fittedWavelength(x, y, regFactor, identificationMethod))
-                aduSum.append(1 / np.sqrt(2 * np.pi) * apertureCoeffs[x][2])
+                aduSum.append(1 / np.sqrt(2 * np.pi) * apertureCoeffs[x][2]*apertureCoeffs[x][4])
             wavelength = np.array(wavelength)
             aduSum = np.array(aduSum)
             ax.plot(wavelength, aduSum)
@@ -360,7 +359,6 @@ class apertureTracer(QWidget):
                 aduSum.append(np.sum(skysubtractedFlux[:, x]))
             wavelength = np.array(wavelength)
             aduSum = np.array(aduSum)
-
             ax.plot(wavelength, aduSum)
 
         spec = np.vstack((wavelength,aduSum))
@@ -373,17 +371,21 @@ class apertureTracer(QWidget):
 
 
 class apertureTraceWidget(QMainWindow):
-    def __init__(self, fileName):
+    def __init__(self, fileName, regFactor = None, identificationMethod= None, savePath = None):
         super().__init__()
         self.FWHM = 2 #Todo add method for getting FHWM, gain, readoutnoise from image hdr
         self.fileName = fileName
-        self.flux = fits.open(fileName)[0].data
+
+        self.hdr, self.flux = openFitData(self.fileName)
         self.skyFit = linearSky
         self.objFit = gaussian
         self.apertureTracerOpen = False
         self.isXcutterPicked = False
         self.cropInfo = cropInfo(y0=0,y1=len(self.flux),x0=0,x1=len(self.flux[0]),filename=self.fileName)
         self.norm = znorm(self.flux)
+        self.regFactor = regFactor
+        self.identificationMethod = identificationMethod
+        self.savePath = savePath
         self.initUI()
 
 
@@ -401,7 +403,17 @@ class apertureTraceWidget(QMainWindow):
 
         self.fittingCanvas = FigureCanvas(Figure()) # contains fitting images
 
-        self.waveCanvas = FigureCanvas(Figure())  # contains fitting images
+        self.apertureExtractWidget = QWidget()
+        self.spectrumCanvas = FigureCanvas(Figure())
+        self.spectrumSaveFitBtn = QPushButton('Save &Fit')
+        self.spectrumSaveFitBtn.clicked.connect(self.onSaveSpectrumInFit)
+
+        self.apertureExtractLayout = QGridLayout()
+        self.apertureExtractLayout.addWidget(self.spectrumCanvas, 0, 0, 1, -1)
+        self.apertureExtractLayout.addWidget(self.spectrumSaveFitBtn, 1, 0)
+
+        self.apertureExtractWidget.setLayout(self.apertureExtractLayout)
+
 
 
 
@@ -413,11 +425,15 @@ class apertureTraceWidget(QMainWindow):
         self.apertureTracerBtn = QPushButton('&ApertureTracer')
         self.apertureTracerBtn.clicked.connect(self.onApertureTracer)
 
-        self.aperturePointBtn = QPushButton('&AperturePoints')
+        self.aperturePointBtn = QPushButton('Aperture&Points')
         self.aperturePointBtn.clicked.connect(self.onFindAperturePoints)
 
-        self.apertureTraceBtn = QPushButton('&ApertureTrace')
+        self.apertureTraceBtn = QPushButton('Aperture&Trace')
         self.apertureTraceBtn.clicked.connect(self.onApertureTrace)
+
+        self.apertureExtractBtn = QPushButton('Aperture&Extract')
+        self.apertureExtractBtn.clicked.connect(self.onApertureExtract)
+
 
         self.progressBar = QProgressBar(self)
 
@@ -429,6 +445,7 @@ class apertureTraceWidget(QMainWindow):
         self.layout.addWidget(self.apertureTracerBtn, 3,0)
         self.layout.addWidget(self.aperturePointBtn, 3,1)
         self.layout.addWidget(self.apertureTraceBtn, 3,2)
+        self.layout.addWidget(self.apertureExtractBtn, 3, 3)
 
         self.layout.addWidget(self.progressBar,4,0,1,-1)
 
@@ -438,6 +455,7 @@ class apertureTraceWidget(QMainWindow):
         self.fittingCanvas.mpl_connect("pick_event", self.onPickAtfittingCanvas)
         self.fittingCanvas.mpl_connect("motion_notify_event", self.onMoveAtfittingCanvas)
         self.fittingCanvas.mpl_connect("button_release_event", self.onReleaseAtfittingCanvas)
+
 
 
     def onCrop(self):
@@ -461,7 +479,7 @@ class apertureTraceWidget(QMainWindow):
         self.apertureTracerOpen = True
         self.data  = self.flux[self.cropInfo.y0:self.cropInfo.y1,
                self.cropInfo.x0:self.cropInfo.x1]
-        self.apertureTracer = apertureTracer(self.data, self.skyFit, self.objFit, fig=self.fittingCanvas.figure, waveFig = self.waveCanvas.figure)
+        self.apertureTracer = apertureTracer(self.data, self.skyFit, self.objFit, fig=self.fittingCanvas.figure, waveFig = self.spectrumCanvas.figure)
         self.apertureTracer.progressChangeSignal.connect(self.onProgressChanged)
 
         self.fittingCanvas.draw()
@@ -499,23 +517,29 @@ class apertureTraceWidget(QMainWindow):
         self.isXcutterPicked = False
 
     def onApertureExtract(self):
-        self.apertureTracer.apertureExtract()
+        self.spec = self.apertureTracer.apertureExtract(self.regFactor, self.identificationMethod, sumMethod='gauss')
+        self.apertureExtractWidget.show()
+        self.apertureExtractWidget.raise_()
+
+    def onSaveSpectrumInFit(self):
+        specCCD = CCDData(data=self.spec, header=self.hdr, unit="adu")
+        if(self.savePath == None):
+            self.savePath = str(QFileDialog.getExistingDirectory(self, "Select Directory to Save"))
+        self.filePath  = self.savePath+'/spec_'+self.fileName.split('/')[-1]
+        specCCD.write(self.filePath, overwrite=True)
+        print(f'Saved in {self.filePath}')
+        self.close()
 
     @pyqtSlot(float)
     def onProgressChanged(self, val):
         self.progressBar.setValue(int(val))
 
-
+'''
 if __name__ == '__main__':
     app = QApplication(sys.argv)
 
     B = fits.open("./Spectroscopy_Example/20181023/combine/comp_15_15.0.fit")
-    matchList = pd.DataFrame(dict(Pixel=[403, 374, 362, 265,
-                                         245, 238, 223, 213,
-                                         178, 169, 144, 131, 53],
-                                  Wavelength=[8780.6, 8495.4, 8377.6, 7438.9,
-                                              7245.2, 7173.9, 7032.4, 6929.5,
-                                              6599.0, 6507.0, 6266.5, 6143.1, 5400.6]))
+    matchList = pd.read_csv("./matchResult.csv")
     flux = B[0].data
     reId = reIdentifier(matchList, flux)
     reId.doFit()
@@ -523,53 +547,8 @@ if __name__ == '__main__':
     identificationMethod = 'linear'
     FWHM = 4
 
-    ex = apertureTraceWidget("./Spectroscopy_Example/20181023/reduced/r_HD18247_60.0_1.fit")
+    ex = apertureTraceWidget("./Spectroscopy_Example/20181023/reduced/r_HD18247_60.0_1.fit", regFactor, identificationMethod)
     ex.show()
     sys.exit(app.exec_())
 
-
-
-
-
-
-
-
-#%%
-B = fits.open("./Spectroscopy_Example/20181023/combine/comp_15_15.0.fit")
-matchList = pd.DataFrame(dict(Pixel=[403, 374, 362, 265,
-                                     245, 238, 223, 213,
-                                     178, 169, 144, 131, 53],
-                              Wavelength=[8780.6, 8495.4, 8377.6, 7438.9,
-                                          7245.2, 7173.9, 7032.4, 6929.5,
-                                          6599.0, 6507.0, 6266.5, 6143.1, 5400.6]))
-flux = B[0].data
-reId = reIdentifier(matchList, flux)
-reId.doFit()
-regFactor = reId.regFactor
-identificationMethod = 'linear'
-FWHM = 4
-
-
-C = fits.open("./Spectroscopy_Example/20181023/reduced/r_uranus_30.0_1.fit")
-
-skyFit = linearSky
-objFit = gaussian
-
-flux = C[0].data[40:110,300:800]
-
-
-apt = apertureTracer(flux, skyFit, objFit)
-apt.findAperturePoints()
-apt.apertureFittingCut(387)
-apt.apertureTrace()
-spec = apt.apertureExtract(regFactor, identificationMethod, sumMethod = 'gauss')
-
-
-
-
-#작은 x에 대해 값이 작아진다. 왜지? preprocessing 문제?
-
-
-
-#M = fits.open("./Spectroscopy_Example/20181023/reduced/r_moon_0.1_1.fit")
-#flux = M[0].data[40:110,300:800]
+'''
