@@ -38,7 +38,7 @@ class preProcessorWidget(QWidget):
         super().__init__()
         self.fitImageTableWidget = fitImageTableWidget(currentFileInfo)
 
-        # 현재 작업중인 폴더와 이미지가 있는 기본폴더를 구분해줄 필요가 있으므로 따로 만들어 놓자.
+        #make
         self.rawFitFileList = currentFileInfo.fitFileList
         self.rawFolderLocation = currentFileInfo.currentFolderLocation
         # 프리프로세싱단계에서 바로 열어줄수 있게 완료된 각각의 sub stage의 filelist를 만들어 놓자.
@@ -114,10 +114,10 @@ class preProcessorWidget(QWidget):
                 for fName in group['FILE-NAME']:
                     filename = self.rawFolderLocation + '/' + fName
                     hdr, data = openFitData(filename, fitInfo='SNUO')
-                    if(self.fitImageTableWidget.currentFileInfo.flags.isCropped):
+                    if(self.fitImageTableWidget.currentFileInfo.flags.isEditted):
                         ccds.append(
-                            data[self.fitImageTableWidget.currentFileInfo.cropInfo.y0:self.fitImageTableWidget.currentFileInfo.cropInfo.y1,
-                            self.fitImageTableWidget.currentFileInfo.cropInfo.x0:self.fitImageTableWidget.currentFileInfo.cropInfo.x1])
+                            data[self.fitImageTableWidget.currentFileInfo.editInfo.y0:self.fitImageTableWidget.currentFileInfo.editInfo.y1,
+                            self.fitImageTableWidget.currentFileInfo.editInfo.x0:self.fitImageTableWidget.currentFileInfo.editInfo.x1])
                     else:
                         ccds.append(data)
                 combined = np.median(ccds, axis=0)
@@ -132,9 +132,9 @@ class preProcessorWidget(QWidget):
                     savePath = combPath / f"{name[0]}_{float(name[1]):.1f}_{j}.fit"
                     filename = self.rawFolderLocation + '/' + fName
                     hdr, data = openFitData(filename, fitInfo='SNUO')
-                    if(self.fitImageTableWidget.currentFileInfo.flags.isCropped):
-                        data = data[self.fitImageTableWidget.currentFileInfo.cropInfo.y0:self.fitImageTableWidget.currentFileInfo.cropInfo.y1,
-                            self.fitImageTableWidget.currentFileInfo.cropInfo.x0:self.fitImageTableWidget.currentFileInfo.cropInfo.x1]
+                    if(self.fitImageTableWidget.currentFileInfo.flags.isEditted):
+                        data = data[self.fitImageTableWidget.currentFileInfo.editInfo.y0:self.fitImageTableWidget.currentFileInfo.editInfo.y1,
+                               self.fitImageTableWidget.currentFileInfo.editInfo.x0:self.fitImageTableWidget.currentFileInfo.editInfo.x1]
                     ccd = CCDData(data=data, header=hdr, unit="adu")
                     ccd.write(savePath, overwrite=True)
 

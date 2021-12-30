@@ -12,13 +12,8 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from astropy.visualization import ZScaleInterval, ImageNormalize
 from matplotlib.patches import Rectangle
 from astropy.nddata import CCDData
-from fitInfo import flags, cropInfo, currentFileInfo
+from fitInfo import flags, editInfo, currentFileInfo
 import os
-
-
-
-
-
 
 
 def zimshow(ax, image, normalize=None, **kwargs):
@@ -31,10 +26,11 @@ def znorm(image, **kwargs):
 
 
 # Todo .ini 나 (세팅파일을 따로 만들거나 main window에서 File>setting 등에서)and/or 읽을 헤더값의 형태를 수정할 수 있게 만들자.
-# todo 다른 파일형에 적용할 수 있게 file opener를 수정할 수 있도록 만들자.+하는중
+
 # Todo 최대한 파일 여는거 openFitData로 처리해서 오류처리랑 다른 파일형으로 수정할수 있게 만들자.
 # Todo 에러처리 이쁘게(에러나면 추가로 창을 띄워서 처리할 수 있게)
 # Todo fileNotFoundError에서 창을 하나 떠 띄워서 원하는 파일을 찾을 수 있게 만들자. 지금은 list로 통째로 받는게 많아서 (과정이)너무 길어져서 비효율적
+
 class fileNotFoundError(Exception):
     def __init__(self):
         super().__init__('file Not Found')
@@ -51,7 +47,12 @@ def openFitData(filename, fitInfo='default'):
         elif (fitInfo =='SNUO'):
             hdr = hdu[0].header
             data = hdu[0].data
+
+        if (len(data[0])<len(data)) :
+            data = np.array(list(zip(*data[::-1])))
+
         return hdr, data
+
 
     except:
         print(f'could not open {filename}, try other filename')
@@ -114,8 +115,6 @@ class pandaTableWidget(QTableWidget):
                 self.setItem(i, j, QTableWidgetItem(x))
         self.setHorizontalHeaderLabels(self.df.columns)
 
-#아예 fitimage-table 형태로 볼 수 있는 위젯을 하나 만드는게 편할듯 > 만듬
-#Todo 다른 형식의 fit 파일도 열수 있도록 수정.
 
 class fitImageTableWidget(QSplitter):
 
@@ -130,7 +129,6 @@ class fitImageTableWidget(QSplitter):
 
         self.fig = plt.Figure()
         self.canvas = FigureCanvas(self.fig)
-        # Todo canvas에 vmax vmin을 조절해서 이미지를 이쁘게 보일수 있는 바를 만들자!
 
         # 테이블들
         # fit파일을 보여주는 테이블
@@ -194,9 +192,9 @@ class fitImageTableWidget(QSplitter):
         hdr, data = openFitData(fileloc, fitInfo='SNUO')
 
 
-        if (self.currentFileInfo.flags.isCropped and not self.currentFileInfo.flags.isReduced):
-            data = data[self.currentFileInfo.cropInfo.y0:self.currentFileInfo.cropInfo.y1,
-                   self.currentFileInfo.cropInfo.x0:self.currentFileInfo.cropInfo.x1]
+        if (self.currentFileInfo.flags.isEditted and not self.currentFileInfo.flags.isReduced):
+            data = data[self.currentFileInfo.editInfo.y0:self.currentFileInfo.editInfo.y1,
+                   self.currentFileInfo.editInfo.x0:self.currentFileInfo.editInfo.x1]
 
         self.fig.clear()
         self.currentData = data
@@ -225,11 +223,9 @@ class imageVRangeSlider(QWidget):
 
         self.VMIN = 0
         self.VMAX = 100
-        #styleoptionslide를 사용해서 custom slider를 만든다.
         self.opt = QStyleOptionSlider()
         self.opt.minimum = 0
         self.opt.maximum = 100
-        #슬라이더가 틱의 어디에 있을 것인가.
         self.setTickPosition(QSlider.TicksAbove)
         self.setTickInterval(1)
 
@@ -356,7 +352,6 @@ class imageVRangeSlider(QWidget):
         self.vChangeSignal.emit((vmin,vmax))
 
     def sizeHint(self):
-        """ override """
         SliderLength = 1000
         TickSpace = 5
 

@@ -22,7 +22,7 @@ from astropy.modeling.models import Gaussian1D, Chebyshev2D
 from mpl_toolkits.mplot3d import Axes3D
 import math
 from scipy import stats
-
+from numpy.polynomial.chebyshev import chebfit, chebval
 from matplotlib.figure import Figure
 
 
@@ -30,18 +30,14 @@ from matplotlib.figure import Figure
 
 
 
-#Todo cross correlation을 사용해 (FFT를 그려서)같은부분을 자동으로 찾아주는 알고리즘을 넣어보자.
-#vs
-#Todo https://github.com/jveitchmichaelis/rascal/blob/master/rascal/calibrator.py hough transform
-# 허프 트렌스폼은 직선을 찾는 알고리즘인데 상대적으로 많은 Wavelength emission값이랑 상대적으로 적은
-# pixel peak 값을 매칭해주는 직선(wavelength/pixel 그래프의 직선)을 찾아주는거 같다
-# 참고해서 자동매칭되게 하고 그 매칭된 정보를 직접 수정해 사용할 수 있도록 하자
 
-#Todo 다른 피팅방식(체비세프라던가)을 적용해 보자.
 
 
 def fittedWavelength(x, y, regFactor, fitMethod):
-    if fitMethod == 'linear':
+    if fitMethod =='chebyshev':
+        return regFactor(x,y)
+
+    elif fitMethod == 'linear':
         if type(y) is not (list or np.ndarray) : y = [y]
 
         wavelength = []
@@ -76,18 +72,114 @@ class reIdentifier(QWidget):
         self.wavelength = None
         self.fittingPoints = pd.DataFrame({'XPixel': [], 'YPixel': [], 'Wavelength': []})
         self.FWHM = FWHM
+        self.fitOrder = 1
         '''
         do Reidentification with matching information(matchlist) and array of comp image flux(flux)
         default setting is do linear fitting along the x axis of the image
         need to impliment another way of fiting. 
         '''
 
-    def doFit(self, fitMethod=None, yStep=None):
+    def doFit(self, fitMethod=None, yStep=None, order = None):
+        print(order)
         if fitMethod is not None:
             self.fitMethod = fitMethod
         if yStep is not None:
             self.yStep = yStep
-        if self.fitMethod == 'linear':
+        if self.fitMethod == 'chebyshev':
+            #Todo Make chebnyshevparameterWidget to change order of chevichev/etc < raise it or make it on the corner
+            #Make paramater: N_RIED, STEP_REID, ORDER_ID(It maybe is from identification step), ORDER_WAVELEN_REID,ORDER_SPATIAL_REID, TOL_REID
+            matchList = self.matchList
+            matchList = matchList[matchList.Pixel != 0]
+            flux = self.flux
+            print(flux)
+            N_SPATIAL, N_WAVELEN = np.shape(flux)
+            STEP_REID = 10
+
+
+            if order is not None and len(order)!=0:
+                ORDER_ID, ORDER_WAVELEN_REID, ORDER_SPATIAL_REID = np.array(order.split(',')).astype(int)
+                self.fitOrder = order
+            else :
+                ORDER_ID = 4
+                ORDER_WAVELEN_REID, ORDER_SPATIAL_REID = 6,6
+                self.fitOrder = '4,6,6'
+
+            N_REID = N_SPATIAL // STEP_REID
+            TOL_REID = 5
+            fwhm = self.FWHM
+
+            fitter = LevMarLSQFitter()
+            #Code from https://github.com/ysBach/SNU_AOclass/blob/master/Notebooks/Spectroscopy_Example.ipynb
+
+            line_REID = np.zeros((len(matchList), N_REID - 1))
+            spatialcoord = np.arange(0, (N_REID - 1) * STEP_REID, STEP_REID) + STEP_REID / 2
+
+            print('Reidentify each section by Chebyshev (order {:d})'.format(ORDER_ID))
+            print('section      |  found  |  RMS')
+            wave = []
+            for i in range(0, N_REID - 1):
+                lower_cut, upper_cut = i * STEP_REID, (i + 1) * STEP_REID
+                reidentify_i = np.sum(flux[lower_cut:upper_cut, :],
+                                      axis=0)
+                peak_gauss_REID = []
+
+                for peak_pix_init in matchList['Pixel']:
+                    search_min = int(np.around(peak_pix_init - TOL_REID))
+                    search_max = int(np.around(peak_pix_init + TOL_REID))
+                    cropped = reidentify_i[search_min:search_max]
+                    x_cropped = np.arange(len(cropped)) + search_min
+
+                    A_init = np.max(cropped)
+                    mean_init = peak_pix_init
+                    stddev_init = fwhm * gaussian_fwhm_to_sigma
+                    g_init = Gaussian1D(amplitude=A_init, mean=mean_init, stddev=stddev_init,
+                                        bounds={'amplitude': (0, 2 * np.max(cropped)),
+                                                'stddev': (0, TOL_REID)})
+                    g_fit = fitter(g_init, x_cropped, cropped)
+                    fit_center = g_fit.mean.value
+                    if abs(fit_center - peak_pix_init) > TOL_REID:
+                        peak_gauss_REID.append(np.nan)
+                        continue
+                    peak_gauss_REID.append(fit_center)
+
+                peak_gauss_REID = np.array(peak_gauss_REID)
+                nonan_REID = np.isfinite(peak_gauss_REID)
+                line_REID[:, i] = peak_gauss_REID
+                peak_gauss_REID_nonan = peak_gauss_REID[nonan_REID]
+                n_tot = len(peak_gauss_REID)
+                n_found = np.count_nonzero(nonan_REID)
+
+
+                coeff_REID1D, fitfull = chebfit(peak_gauss_REID_nonan,
+                                                    matchList['Wavelength'][nonan_REID],
+                                                    deg=ORDER_WAVELEN_REID,
+                                                    full=True)
+                fitRMS = np.sqrt(fitfull[0][0] / n_found)
+                print('[{:04d}:{:04d}]\t{:d}/{:d}\t{:.3f}'.format(lower_cut, upper_cut,
+                                                                  n_found, n_tot, fitRMS))
+                self.progressChangeSignal.emit(i / (N_REID - 1) * 100)
+
+            points = np.vstack((line_REID.flatten(),
+                                np.tile(spatialcoord, len(line_REID))))
+            points = points.T  # list of ()
+            nanmask = (np.isnan(points[:, 0]) | np.isnan(points[:, 1]))
+            points = points[~nanmask]
+            values = np.repeat(matchList['Wavelength'], N_REID - 1)
+            values = np.array(values.tolist())
+            values = values[~nanmask]
+            errors = np.ones_like(values)
+
+
+            coeff_init = Chebyshev2D(x_degree=ORDER_WAVELEN_REID, y_degree=ORDER_SPATIAL_REID)
+            fit2D_REID = fitter(coeff_init, points[:, 0], points[:, 1], values)
+            ww, ss = np.mgrid[:N_WAVELEN, :N_SPATIAL]
+            xPix = points[:,0]
+            yPix = points[:,1]
+            fittingPoints = pd.DataFrame({'XPixel': np.round(xPix, 4), 'YPixel': yPix, 'Wavelength': values})
+            wavelength = fit2D_REID(ww, ss).T
+            regFactor = fit2D_REID
+
+        elif self.fitMethod == 'linear':
             matchList = self.matchList
             matchList = matchList[matchList.Pixel != 0]
             ystep = self.yStep
@@ -208,6 +300,14 @@ class reIdentifier(QWidget):
                     x, yCut, self.regFactor, self.fitMethod), 'rx', ms=5)
             yResidualAx.axhline(0, color='blue')
 
+        fig.suptitle("Reidentify and Wavelength Map\nMethod={}, Order=({})".format(self.fitMethod,self.fitOrder))
+        imgAx.set_ylabel('Spatial direction(pix)')
+        yResidualAx.set_xlabel('Dispersion direction(pix)')
+        yResidualAx.set_ylabel('Wavelength residual(Å)')
+        yCutAx.set_ylabel('Wavelength(Å)')
+
+        xCutAx.set_xlabel('Wavelength(Å)')
+
     def setMatchList(self, matchList: pd.DataFrame):
         self.matchList = matchList
     def setFlux(self, flux: np.ndarray):
@@ -221,7 +321,7 @@ class reIdentifier(QWidget):
 
 
 class reIdentificationWidget(QWidget):
-    identificationDoneSignal = pyqtSignal(pd.DataFrame, str)
+    identificationDoneSignal = pyqtSignal(object, str)
     def __init__(self, matchList: pd.DataFrame, flux: np.ndarray, fitMethod='linear', FWHM=2):
         super().__init__()
         self.flux = flux
@@ -245,6 +345,11 @@ class reIdentificationWidget(QWidget):
         self.loadingBar = QProgressBar(self)
         self.linearButton = QPushButton('Start Fitting with &Line Regression',self)
         self.linearButton.clicked.connect(self.onLinearFittingStart)
+        self.chebyButton = QPushButton('Start Fitting with &Chebyshev2D',self)
+        self.chebyButton.clicked.connect(self.onChebyshevFittingStart)
+        self.chebyArgText = QLineEdit(self)
+        self.chebyArgText.setPlaceholderText("1dOrder,xOrder,yOrder")
+        #Todo Add Another Method If needed
 
         self.yStepSlider = QSlider(Qt.Horizontal, self)
         self.yStepSlider.setValue(1)
@@ -280,15 +385,21 @@ class reIdentificationWidget(QWidget):
         self.layout.addWidget(self.yStepSlider, 2, 0)
         self.layout.addWidget(self.yStepSliderLabel, 2, 1)
         self.layout.addWidget(self.linearButton, 3, 0)
-        self.layout.addWidget(self.loadingBar, 4, 0, 1, -1)
-        self.layout.addWidget(self.finishBtn, 5, 0, 1, -1)
+        self.layout.addWidget(self.chebyButton, 4, 0)
+        self.layout.addWidget(self.chebyArgText, 4, 1)
+        self.layout.addWidget(self.loadingBar, 5, 0, 1, -1)
+        self.layout.addWidget(self.finishBtn, 6, 0, 1, -1)
         self.setLayout(self.layout)
 
 
-
+    def onChebyshevFittingStart(self):
+        args = self.chebyArgText.text()
+        self.reIdentifier.doFit(fitMethod='chebyshev', yStep=None, order = args)
+        self.on2DPlot()
 
     def onLinearFittingStart(self):
         self.reIdentifier.doFit(fitMethod='linear')
+        self.on2DPlot()
 
     def onYStepSliderChanged(self, val):
         self.yStepSliderLabel.setText(str(val))
@@ -344,14 +455,13 @@ class reIdentificationWidget(QWidget):
 if __name__ == '__main__':
     app = QApplication(sys.argv)
 
-    B = fits.open("./Spectroscopy_Example/20181023/combine/comp_15_15.0.fit")
     matchList = pd.DataFrame(dict(Pixel=[403, 374, 362, 265,
                                          245, 238, 223, 213,
                                          178, 169, 144, 131, 53],
                                   Wavelength=[8780.6, 8495.4, 8377.6, 7438.9,
                                               7245.2, 7173.9, 7032.4, 6929.5,
                                               6599.0, 6507.0, 6266.5, 6143.1, 5400.6]))
-    flux = B[0].data
+    _,flux = openFitData("./Spectroscopy_Example/20181023/combine/comp_15_15.0.fit")
     ex = reIdentificationWidget(matchList, flux)
     ex.show()
     sys.exit(app.exec_())

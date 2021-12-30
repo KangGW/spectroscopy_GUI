@@ -22,6 +22,13 @@ from astropy.modeling.models import Gaussian1D, Chebyshev2D
 from mpl_toolkits.mplot3d import Axes3D
 from matplotlib.figure import Figure
 from reIdentificationWidget import reIdentificationWidget
+import itertools
+from rascal.calibrator import Calibrator
+from rascal.util import refine_peaks
+from scipy.signal import find_peaks
+from scipy.signal import resample
+
+
 
 from scipy import stats
 #우선 있는 파일 중에 Cali 파일만 열어서 first identification 하는 프로그램
@@ -46,13 +53,233 @@ from scipy import stats
 #Todo 새로운 스펙트럼을 열어서 비교하는 방법을 사용한다. 이때 https://physics.nist.gov/의 정보를 받아와서 스펙트럼을 만드는 방법을 생각해 보자(기본
 # 적으로 Relative intensity가 있으니 스펙트럼화해서 쓰면 될 것이다!
 
+'''
+#Rascal Not Working:Need Precise scaling/fine tuning for each and every image, NOT WORTH FOR AUTOMATION
 
-#호에엥
+## Auto cali method?
+cali = fits.open('./Spectroscopy_Example/20181023/combine/comp_15_15.0.fit')
+spectrum = np.average(cali[0].data[50:70,:], axis=0)
+identify = spectrum
+ground = np.median(identify[0:200])
+max_intens = np.max(identify)
+MINSEP_PK = 2
+MINAMP_PK = 0.01
+NMAX_PK = 50
+peakPixs = peak_local_max(identify, num_peaks=NMAX_PK,
+                          min_distance=MINSEP_PK,
+                          threshold_abs=max_intens * MINAMP_PK + ground)
+peaks = peakPixs.reshape(1,-1)[0]
+#peaks_refined = refine_peaks(spectrum, peaks, window_width=5)
+#peaks_refined = peaks
+
+peaks, _ = find_peaks(spectrum, height=500, distance=MINSEP_PK, threshold=None)
+peaks_refined = refine_peaks(spectrum, peaks, window_width=MINSEP_PK)
+atlas = np.array([5330.8000, 5400.5620, 5764.4180, 5852.4878, 5944.8342, 6029.9971, 6074.3377, 6096.1630, 6143.0623,
+         6163.5939, 6217.2813, 6266.4950, 6304.7892, 6334.4279, 6382.9914, 6402.2460, 6506.5279, 6532.8824,
+         6598.9529, 6717.0428, 6929.4680, 7032.4127, 7173.9390, 7245.1670, 7438.8990, 7488.8720, 7535.7750,
+         8082.4580, 8377.6070])
+         
+element = ['Ne'] * len(atlas)
+
+c = Calibrator(peaks_refined, spectrum)
+
+c.set_calibrator_properties(num_pix=len(spectrum),
+                            plotting_library='matplotlib',
+                            log_level='info')
+
+c.set_hough_properties(num_slopes=5000,
+                       xbins=100,
+                       ybins=100,
+                       min_wavelength=5000.,
+                       max_wavelength=8000.,
+                       range_tolerance=500.,
+                       linearity_tolerance=50)
+
+c.set_ransac_properties(sample_size=5,
+                        top_n_candidate=5,
+                        linear=True,
+                        filter_close=True,
+                        ransac_tolerance=5,
+                        candidate_weighted=True,
+                        hough_weight=1.0)
+                        
+c.load_user_atlas(elements=element,
+                  wavelengths=atlas,
+                  constrain_poly=True)
+c.do_hough_transform()
+
+
+fit_coeff, rms, residual, peak_utilisation = c.fit(max_tries=1)
+c.plot_fit(fit_coeff,
+           plot_atlas=True,
+           log_spectrum=False,
+           tolerance=100.)
+'''
+
+"""
+#make hough spectrum
+
+cali = fits.open('./Spectroscopy_Example/20181023/combine/comp_15_15.0.fit')
+identify = np.average(cali[0].data[50:70,:], axis=0)
+ground = np.median(identify[0:200])
+max_intens = np.max(identify)
+MINSEP_PK = 2
+MINAMP_PK = 0.01
+NMAX_PK = 50
+peakPixs = peak_local_max(identify, num_peaks=NMAX_PK,
+                          min_distance=MINSEP_PK,
+                          threshold_abs=max_intens * MINAMP_PK + ground)
+peakPixs = peakPixs.reshape(1,-1)[0]
+peaks = np.array([5330.8000, 5400.5620, 5764.4180, 5852.4878, 5944.8342, 6029.9971, 6074.3377, 6096.1630, 6143.0623,
+         6163.5939, 6217.2813, 6266.4950, 6304.7892, 6334.4279, 6382.9914, 6402.2460, 6506.5279, 6532.8824,
+         6598.9529, 6717.0428, 6929.4680, 7032.4127, 7173.9390, 7245.1670, 7438.8990, 7488.8720, 7535.7750,
+         8082.4580, 8377.6070])
+pairs = [pair for pair in itertools.product(peakPixs, peaks)]
+pairs = np.array(pairs)
+#make peak-wavelength pairs
+plt.plot(pairs[:,0], pairs[:,1], '.')
+plt.show()
+
+range_tolerance = 5000
+linearity_tolerance = 10
+
+min_slope = (peaks.max() - peaks.min() - 2* range_tolerance ) / (peakPixs.max() - peakPixs.min()) / linearity_tolerance
+max_slope = (peaks.max() - peaks.min()+ 2* range_tolerance) / (peakPixs.max() - peakPixs.min()) *linearity_tolerance
+#high pixel make low intercept > need to preprocess it?
+
+
+min_intercept = peaks.min() - range_tolerance
+max_intercept = peaks.max() + range_tolerance
+
+num_slopes = 2000
+x = pairs[:,0]
+y = pairs[:,1]
+slopes = np.linspace(min_slope, max_slope, num_slopes)
+
+intercepts = np.concatenate(y - np.outer(slopes, x))
+gradients = np.concatenate(np.column_stack([slopes] * len(x)))
+
+mask = ((min_intercept <= intercepts) &
+        (intercepts <= max_intercept))
+intercepts = intercepts[mask]
+gradients = gradients[mask]
+hough_points = np.column_stack((gradients, intercepts))
+#with making mock slopes and intercepts to determine hough lines
+plt.scatter(hough_points[:,0], hough_points[:,1], s=0.1)
+plt.show()
+
+#Todo bin_hough5_points
+xbins, ybins = 100,100
+hist, xedges, yedges = np.histogram2d(
+    hough_points[:, 0],
+    hough_points[:, 1],
+    bins=(xbins, ybins))
+
+X, Y = np.meshgrid(xedges, yedges)
+plt.pcolormesh(X, Y, hist)
+plt.show()
+
+hist_sorted_arg = np.dstack(
+    np.unravel_index(
+        np.argsort(hist.ravel())[::-1], hist.shape))[0]
+
+xbin_width = (xedges[1] - xedges[0]) / 2
+ybin_width = (yedges[1] - yedges[0]) / 2
+
+lines = []
+
+for b in hist_sorted_arg:
+    lines.append((xedges[b[1]] + xbin_width,
+                  yedges[b[0]] + ybin_width))
+
+hough_lines = np.array(lines)
+plt.scatter(hough_lines[:,0], hough_lines[:,1], s=0.01)
+plt.show()
+
+candidates = []
+candidate_tolerance = 10
+def gauss(x, a, x0, sigma):
+    return a * np.exp(-(x - x0)**2 / (2 * sigma**2 + 1e-9))
+
+for line in hough_lines:
+    gradient, intercept = line
+
+    predicted = (gradient * pairs[:, 0] + intercept)
+    actual = pairs[:, 1]
+    diff = np.abs(predicted - actual)
+    mask = (diff <= candidate_tolerance)
+
+    # Match the range_tolerance to 1.1775 s.d. to match the FWHM
+    # Note that the pairs outside of the range_tolerance were already
+    # removed in an earlier stage
+
+    weight = gauss(actual[mask], 1., predicted[mask],
+                   (range_tolerance + linearity_tolerance) *
+                   1.1775)
+
+    candidates.append((pairs[:,0][mask], actual[mask], weight))
+"""
+"""
+Still, Automation is needed So I tried to do in easier(but never precise nor scientific) way:
+match highest peak first and do hough transfrom should be the best way.
+
+
+_,data = openFitData('./Spectroscopy_Example/2021-06-19/Neon-0001.fit')
+
+
+
+spectrum = np.average(data[50:70,:], axis=0)
+identify = spectrum
+ground = np.median(identify[0:200])
+max_intens = np.max(identify)
+MINSEP_PK = 2
+MINAMP_PK = 0.01
+NMAX_PK = 50
+peakPixs = peak_local_max(identify, num_peaks=NMAX_PK,
+                          min_distance=MINSEP_PK,
+                          threshold_abs=max_intens * MINAMP_PK + ground)
+peaks = peakPixs.reshape(1,-1)[0]
+
+atlas = np.array([5330.8000, 5400.5620, 5764.4180, 5852.4878, 5944.8342, 6029.9971, 6074.3377, 6096.1630, 6143.0623,
+         6163.5939, 6217.2813, 6266.4950, 6304.7892, 6334.4279, 6382.9914, 6402.2460, 6506.5279, 6532.8824,
+         6598.9529, 6717.0428, 6929.4680, 7032.4127, 7173.9390, 7245.1670, 7438.8990, 7488.8720, 7535.7750,
+         8082.4580, 8377.6070])# =self.standardPeakWavelengths 
+
+
+
+
+
+#Match highest peak and around
+
+highestWavelength = 5852.4878
+filePath = './NeonArcSpectrum.fit'
+_,data = openFitData(filePath)
+wavelength, flux = data
+
+
+flux
+data
+# match highest
+
+# 
+
+"""
+
+
+
 #1. standardSpectrumCanvas가 선택된 상태에서 axvline을 더블클릭하면 그 라인의 색깔이 바뀌고,
 #2. selfSpectrumCanvas에 같은 색깔의 긴 axvline이 생긴다. 이건 마우스 따라 움직이고  selfSpectrumCanvas axvline 근처에 가져다되면 달라붙는다.
 #3. 마우스 우클릭시 과정 초기화-> 1. 전으로 이동
 #4. 달라붙었을때 더블클릭하면 해당 정보가 저장되고 왼쪽 테이블에 뜬다.
 
+
+#Todo Make First Identification algorithm that do 1D fitting using linear/chevichev/polynomial fitter.
+#Todo cross correlation을 사용해 (FFT를 그려서)같은부분을 자동으로 찾아주는 알고리즘을 넣어보자.
+#vs
+#Todo https://github.com/jveitchmichaelis/rascal/blob/master/rascal/calibrator.py hough transform
+# 허프 트렌스폼은 직선을 찾는 알고리즘인데 상대적으로 많은 Wavelength emission값이랑 상대적으로 적은
+# pixel peak 값을 매칭해주는 직선(wavelength/pixel 그래프의 직선)을 찾아주는거 같다
+# 참고해서 자동매칭되게 하고 그 매칭된 정보를 직접 수정해 사용할 수 있도록 하자
 
 
 class identificationWidget(QMainWindow):
@@ -761,6 +988,8 @@ class identificationWidget(QMainWindow):
         matchInfo = np.column_stack((self.standardPeakWavelengths, self.matchedPeakPixs))
         self.wavelengthPixelList = pd.DataFrame(matchInfo,
                                                 columns=['Wavelength', 'Pixel'])
+
+
         self.onChangedList()
         self.standardSpectrumAx.figure.canvas.draw()
 

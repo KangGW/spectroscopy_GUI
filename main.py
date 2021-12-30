@@ -30,17 +30,14 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from astropy.visualization import ZScaleInterval, ImageNormalize
 from matplotlib.patches import Rectangle
 from astropy.nddata import CCDData
-from cropWidget import cropWidget, cropCheckWidget
+from editWidget import editWidget, cropCheckWidget
 from fitImageTableWidget import fitImageTableWidget
 from preProcessorWidget import preProcessorWidget
-from fitInfo import cropInfo, currentFileInfo
+from fitInfo import editInfo, currentFileInfo
 from identificationWidget import identificationWidget
 from apertureTraceWidget import apertureTraceWidget
+
 import os
-
-
-
-
 
 
 #설계 : 이미지를 볼 수 있는 창과, 진행 상황을 볼 수 있는 창을 만들자.
@@ -50,23 +47,49 @@ import os
 #combine - bias substraction - dark substraction - preprocessing 
 #버튼을 일렬로 배치하고 각각의 단계에서 버튼을 온-오프해서 순서를 정하자
 #각각의 단계에서 필요한 이미지의 목록을 - combine에선 콤바인이 완료된 이미지의 목록 -bias substraction에선 bias가 빠진 dark - dark substraction에서는 다크가 빠진 플렛 이미지 - preprocessing 후에는 프리프로세싱이 끝난 이미지들
+"""
+Schematic
+Toolbar section:
+File   
+┖ Open > opens folder with images
+┖ Edit > edit file list #Todo 
+┖ Exit > exit program
+Processing  
+┖ Crop > crops image to target necessary for 
+┖ preProcessing > do preprocessing. 
+    It's optional. you can upload preprocessed image instead.
+Identification
+┖identification > do identification and reIdentification. Need to automized.
+ApertureTrace
+┖apertureTrace > do aperture trace and extract. make it to fits file
+standardization
+┖standardization > standardize extracted aprture with standard star fits.
+Window section:
+[fig showing window] | [header table window]
+shows fig with configurable pixel value range |
+Information including file name, observation date, exposure time, image type, object and remarks.
+
+Interactive functions:
+    For main Window:
+    Image visulize range is interactively configurable.
+    Can show fits image in process by double clicking table.
+    For Processing:
+    Can crop image into smaller pieces, especially to limit range into actual target data.For identification:
+    Can match peaks of comp image pixel and neon ramp wavelength
+    Can check reientification result for each x/y cuts.
+    extract useless datapoitns and redo fitting [#Todo]
+    Choose fit method by button[#Todo]
+    For apertureTrace:
+    Can check aptrace result for each x/y cuts.
+    extract useless datapoitns and redo fitting [#Todo]
+    Choose fit method by button[#Todo]
+    
+    
+    """
 
 
-#조직도
-#파일
-    #오픈(이미지가 들어있는 파일 오픈)
-    #에디트(파일 수정(필요없는 파일 제거 등등)
-    #exit(끄기)
-
-
-    #저장(저장 위치 정하기) _일단 보류
-#프로세싱
-    #프리프로세싱(크롭 및 전처리), (아이디피케이션(패턴매칭을 통한 아이디피케이션))
-    #리아이디
-    #APTRACE
-
-#각각의 과정에서 얻어지는 결과물을 기본 패스 아래 다른 폴더에 넣어서 저장하고,
-#각각 파일이 없을 경우 에러를 띄워서 순서를 정하자
+    #각각의 과정에서 얻어지는 결과물을 기본 패스 아래 다른 폴더에 넣어서 저장하고,
+    #각각 파일이 없을 경우 에러를 띄워서 순서를 정하자
 
 #Todo Widget과 Method를 구분해서 GUI 뿐만 아니라, terminal에서도 사용할 수 있게 + 유지보수가 쉽게 만들자.
 #Todo 한꺼번에 여러개 aptrace/apextract 가능하게 수정해 보자
@@ -95,23 +118,23 @@ class MyApp(QMainWindow):
 
         self.initUI()
         
-        
+
         
     def initUI(self):
-
+        #open up widgets
         self.identificationWidget = identificationWidget()
         self.identificationWidget.reidentificationWidget.identificationDoneSignal.connect(self.onIdentificationDone)
 
-        self.cropWidget = cropWidget()
+        self.editWidget = editWidget()
 
         self.fitImageTableWidget = fitImageTableWidget(self.currentFileInfo)
-        self.cropWidget.cropCheckWidget.imageCropSignal.connect(self.imageCrop)
+        self.editWidget.cropCheckWidget.imageCropSignal.connect(self.imageCrop)
 
         self.resize(1500,750)
         self.center()
 #       self.setWindowIcon(QIcon('icon.png'))#아이콘 설정
         self.setCentralWidget(self.fitImageTableWidget)
-
+        #Todo Make a statusbar to show current progress:ex)doing preprocessing now...etc
         
         # 아래에 현재 상황을 표시하는 스테이터스바 하나
         # 툴바도 가능하면 만들자. 
@@ -274,17 +297,17 @@ class MyApp(QMainWindow):
         
 
     def onCropAction(self):
-        self.cropWidget.setFileName(self.fitImageTableWidget.currentFileInfo.currentFileLocation)
-        self.cropWidget.show()
-        self.cropWidget.raise_()
+        self.editWidget.setFileName(self.fitImageTableWidget.currentFileInfo.currentFileLocation)
+        self.editWidget.show()
+        self.editWidget.raise_()
 
     
     
-    @pyqtSlot(cropInfo)
-    def imageCrop(self, crop):
-        self.cropWidget.close()
-        self.fitImageTableWidget.currentFileInfo.cropInfo = crop
-        self.fitImageTableWidget.currentFileInfo.flags.isCropped = True
+    @pyqtSlot(editInfo)
+    def imageCrop(self, edit):
+        self.editWidget.close()
+        self.fitImageTableWidget.currentFileInfo.editInfo = edit
+        self.fitImageTableWidget.currentFileInfo.flags.isEditted = True
         self.fitImageTableWidget.tableEdit()
         
     def onPreprocessing(self):
@@ -313,7 +336,11 @@ class MyApp(QMainWindow):
     def onApertureTrace(self):
         SpectPath = self.fitImageTableWidget.mainFolderLoc  + '/spectrum'
         Path.mkdir(Path(SpectPath), mode=0o777, exist_ok=True)
-        self.apertureTracerWidget = apertureTraceWidget(self.fitImageTableWidget.currentFileInfo.currentFileLocation, regFactor = self.regFactor, identificationMethod= self.identificationMethod, savePath = SpectPath)
+        # self.apertureTracerWidget = apertureTraceWidget(self.fitImageTableWidget.currentFileInfo.currentFileLocation, regFactor = self.regFactor, identificationMethod= self.identificationMethod, savePath = SpectPath, imageList = self.fitImageTableWidget.currentFileInfo.fitFileList['FILE-NAME'])
+        self.apertureTracerWidget = apertureTraceWidget(self.fitImageTableWidget.currentFileInfo.currentFileLocation,
+                                                        regFactor=self.regFactor,
+                                                        identificationMethod=self.identificationMethod,
+                                                        savePath=SpectPath)
         self.apertureTracerWidget.show()
         self.apertureTracerWidget.raise_()
 
